@@ -28,6 +28,7 @@ class EbayItem(BaseModel):
     is_group: str
     needs_details: str
     itemWebUrl: str
+    imageUrl: str
     localizedAspects: Any  # This is a JSON string, can be parsed to List[LocalizedAspect]
 
 class EbayResearch(BaseModel):
@@ -37,6 +38,7 @@ class EbayResearch(BaseModel):
     
 class EbayResearchStatsRequest(BaseModel):
     name: str
+    params: Optional[dict[str, Any]] = None
         
     
 class EbayResearchStatsResponse(BaseModel):
@@ -45,4 +47,10 @@ class EbayResearchStatsResponse(BaseModel):
     max: float  
     mean: float
     median: float
-    
+
+# Add request model for research-items
+class EbayResearchItemsRequest(BaseModel):
+    name: str
+    skip: int = 0
+    limit: int = 10
+    params: Optional[dict[str, Any]] = None

@@ -1,7 +1,8 @@
-from fastapi import FastAPI, HTTPException
-from models import MsgPayload, EbayResearchStatsRequest, EbayResearchStatsResponse
+from fastapi import FastAPI, HTTPException, Query
+from models import MsgPayload, EbayResearchStatsRequest, EbayResearchStatsResponse, EbayItem, EbayResearchItemsRequest
 from pymongo import MongoClient
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 app = FastAPI()
 # Add CORS middleware to allow all origins
@@ -54,15 +55,53 @@ def ebay_research_stats(request: EbayResearchStatsRequest) -> EbayResearchStatsR
     if not doc:
         raise HTTPException(status_code=404, detail="Research not found")
     
-    count = len(doc.get("results", []))
-    min_price = min(item['price_value'] for item in doc.get("results", [])) if doc.get("results") else 0
-    max_price = max(item['price_value'] for item in doc.get("results", [])) if doc.get("results") else 0
-    mean_price = sum(float(item['price_value']) for item in doc.get("results", [])) / count if count > 0 else 0
-    median_price = sorted(float(item['price_value']) for item in doc.get("results", []))[(count - 1) // 2] if count > 0 else 0
-    # Remove MongoDB's '_id' field if present, as Pydantic models don't expect it
-    doc.pop("_id", None)
+    if request.params:
+        # Apply any additional filtering based on params if needed
+        # This is a placeholder for future implementation
+        if request.params.get("screen_size"):
+            doc["results"] = [item for item in doc.get("results", []) if item.get("screen_size") == request.params["screen_size"]]  
+        if request.params.get("ram"):
+            doc["results"] = [item for item in doc.get("results", []) if item.get("ram") == request.params["ram"]]
+        if request.params.get("ssd"):
+            doc["results"] = [item for item in doc.get("results", []) if item.get("hdd") == request.params["ssd"]]  
     
+    count = len(doc.get("results", []))
+    # Treat price_value as number for calculations
+    prices = [float(item['price_value']) for item in doc.get("results", [])]
+    min_price = min(prices) if prices else 0
+    max_price = max(prices) if prices else 0
+    mean_price = sum(prices) / len(prices) if prices else 0
+    median_price = sorted(prices)[(len(prices) - 1) // 2] if prices else 0
     
     return EbayResearchStatsResponse(count=count, min=min_price, max=max_price, mean=mean_price, median=median_price)
+
+
+
+# New endpoint for paginated EbayItem list
+@app.post("/ebay/research-items", response_model=list[EbayItem])
+def ebay_research_items(request: EbayResearchItemsRequest):
+    doc = researches_collection.find_one({"name": request.name})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Research not found")
+    
+    if request.params:
+        # Apply any additional filtering based on params if needed
+        # This is a placeholder for future implementation
+        if request.params.get("screen_size"):
+            doc["results"] = [item for item in doc.get("results", []) if item.get("screen_size") == request.params["screen_size"]]  
+        if request.params.get("ram"):
+            doc["results"] = [item for item in doc.get("results", []) if item.get("ram") == request.params["ram"]]
+        if request.params.get("ssd"):
+            doc["results"] = [item for item in doc.get("results", []) if item.get("hdd") == request.params["ssd"]]  
+    
+    items = doc.get("results", [])
+    # Sort items by price_value ascending
+    items = sorted(items, key=lambda x: float(x.get("price_value", 0)))
+    skip = max(request.skip, 0)
+    limit = min(max(request.limit, 1), 100)
+    paginated_items = items[skip:skip+limit]
+    for item in paginated_items:
+        item.pop("_id", None)
+    return paginated_items
 
 
