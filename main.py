@@ -1,8 +1,11 @@
 from fastapi import FastAPI, HTTPException, Query
-from models import MsgPayload, EbayResearchStatsRequest, EbayResearchStatsResponse, EbayItem, EbayResearchItemsRequest
+from models import MsgPayload, \
+        EbayResearchStatsRequest, EbayResearchStatsResponse, \
+        EbayItem, EbayResearchItemsRequest, \
+        EbayModelItemsRequest, EbayModelItemsResponse, EbayModelItem, \
+        EbayModelItemUpdateRequest, EbayModelItemUpdateResponse
 from pymongo import MongoClient
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 app = FastAPI()
 # Add CORS middleware to allow all origins
@@ -20,6 +23,7 @@ messages_list: dict[int, MsgPayload] = {}
 client = MongoClient("mongodb://localhost:27017/")
 db = client["mybaydb"]
 researches_collection = db["researches"]
+
 
 
 @app.get("/")
@@ -49,6 +53,7 @@ def message_items() -> dict[str, dict[int, MsgPayload]]:
     return {"messages:": messages_list}
 
 
+
 @app.post("/ebay/research-stats", response_model=EbayResearchStatsResponse)
 def ebay_research_stats(request: EbayResearchStatsRequest) -> EbayResearchStatsResponse:
     doc = researches_collection.find_one({"name": request.name})
@@ -64,7 +69,10 @@ def ebay_research_stats(request: EbayResearchStatsRequest) -> EbayResearchStatsR
             doc["results"] = [item for item in doc.get("results", []) if item.get("ram") == request.params["ram"]]
         if request.params.get("ssd"):
             doc["results"] = [item for item in doc.get("results", []) if item.get("hdd") == request.params["ssd"]]  
-    
+        # Filter by conditions if provided
+        if request.params.get("conditions"):
+            doc["results"] = [item for item in doc.get("results", []) if item.get("condition") in request.params.get("conditions")]
+        
     count = len(doc.get("results", []))
     # Treat price_value as number for calculations
     prices = [float(item['price_value']) for item in doc.get("results", [])]
@@ -93,7 +101,10 @@ def ebay_research_items(request: EbayResearchItemsRequest):
             doc["results"] = [item for item in doc.get("results", []) if item.get("ram") == request.params["ram"]]
         if request.params.get("ssd"):
             doc["results"] = [item for item in doc.get("results", []) if item.get("hdd") == request.params["ssd"]]  
-    
+        # Filter by conditions if provided
+        if request.params.get("conditions"):
+            doc["results"] = [item for item in doc.get("results", []) if item.get("condition") in request.params.get("conditions")]
+        
     items = doc.get("results", [])
     # Sort items by price_value ascending
     items = sorted(items, key=lambda x: float(x.get("price_value", 0)))
@@ -103,5 +114,115 @@ def ebay_research_items(request: EbayResearchItemsRequest):
     for item in paginated_items:
         item.pop("_id", None)
     return paginated_items
+
+
+@app.post("/ebay/model-items", response_model=EbayModelItemsResponse)
+def ebay_model_items(request: EbayModelItemsRequest):
+    try:
+        collection = None
+        if request.name == "MacBookPro":
+            collection = db["mac_book_pro"]
+        if collection is None:
+            raise HTTPException(status_code=404, detail="Model collection not found")
+        all_items = []
+        for doc in collection.find():
+            if request.include_all:
+                all_items.append(doc)
+            else:
+                if doc.get("is_laptop") in [None, True] and \
+                    (not doc.get("is_charger_included") or \
+                    not doc.get("screen_damage") or \
+                    not doc.get("battery_health") or \
+                    not doc.get("keyboard_damage") or \
+                    not doc.get("hosting_damage")):
+                        all_items.append(doc)
+        # Sort items by price_value ascending
+        all_items = sorted(all_items, key=lambda x: x.get("itemId"))
+        skip = max(request.skip, 0)
+        limit = min(max(request.limit, 1), 100)
+        paginated_items = all_items[skip:skip+limit]
+        ret_value = EbayModelItemsResponse(
+            items=[],
+            total_count=len(all_items)
+        )
+        for item in paginated_items:
+            ebayModelItem = EbayModelItem(
+                itemId=item.get("itemId"),
+                title=item.get("title"),
+                condition=item.get("condition", None),
+                
+                shortDescription=item.get("shortDescription", ""),
+                conditionDescription=item.get("conditionDescription", ""),
+                description=item.get("description", ""),
+                itemWebUrl=item.get("itemWebUrl", ""),
+                imageUrl=item.get("image").get("imageUrl") if item.get("image") else None,
+                is_laptop=item.get("is_laptop", None),
+                is_charger_included=item.get("is_charger_included", None),
+                screen_damage=item.get("screen_damage", None),
+                battery_health=item.get("battery_health", None),
+                keyboard_damage=item.get("keyboard_damage", None),
+                hosting_damage=item.get("hosting_damage", None)
+            )
+            ret_value.items.append(ebayModelItem)
+            print(item.get("is_laptop"))
+
+        return ret_value
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ebay/update-model-item", response_model=EbayModelItemUpdateResponse)
+def update_model_item(request: EbayModelItemUpdateRequest):
+    try:
+        # For now, we only support MacBookPro collection
+        # This could be extended to support other models in the future
+        collection = db["mac_book_pro"]
+        
+        # Find the item by itemId
+        existing_item = collection.find_one({"itemId": request.itemId})
+        if not existing_item:
+            raise HTTPException(status_code=404, detail="Item not found")
+        
+        # Prepare update fields - only include fields that are not None
+        update_fields = {}
+        if request.is_laptop is not None:
+            update_fields["is_laptop"] = request.is_laptop
+        if request.is_charger_included is not None:
+            update_fields["is_charger_included"] = request.is_charger_included
+        if request.screen_damage is not None:
+            update_fields["screen_damage"] = request.screen_damage
+        if request.battery_health is not None:
+            update_fields["battery_health"] = request.battery_health
+        if request.keyboard_damage is not None:
+            update_fields["keyboard_damage"] = request.keyboard_damage
+        if request.hosting_damage is not None:
+            update_fields["hosting_damage"] = request.hosting_damage
+        
+        # If no fields to update, return error
+        if not update_fields:
+            raise HTTPException(status_code=400, detail="No valid fields provided for update")
+        
+        # Update the item in MongoDB
+        result = collection.update_one(
+            {"itemId": request.itemId},
+            {"$set": update_fields}
+        )
+        
+        if result.modified_count == 0:
+            return EbayModelItemUpdateResponse(
+                success=False,
+                message="No changes were made to the item"
+            )
+        
+        return EbayModelItemUpdateResponse(
+            success=True,
+            message=f"Item {request.itemId} updated successfully"
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
