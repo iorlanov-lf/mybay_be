@@ -1,99 +1,170 @@
-from typing import List, Optional, Any
-from pydantic import BaseModel, Field
+from datetime import datetime
+from decimal import Decimal
+from typing import List, Optional, Any, Union, Dict
+
+from pydantic import BaseModel, Field, ConfigDict
 
 
-class MsgPayload(BaseModel):
-    msg_id: Optional[int]
-    msg_name: str
+# class MsgPayload(BaseModel):
+#     msg_id: Optional[int]
+#     msg_name: str
 
-class LocalizedAspect(BaseModel):
-    type: str
-    name: str
-    value: str
+# class LocalizedAspect(BaseModel):
+#     type: str
+#     name: str
+#     value: str
 
-class EbayItem(BaseModel):
-    itemId: str = Field(..., alias="﻿itemId")
-    title: str
-    model: str
-    screen_size: str
-    ram: str
-    hdd: str
-    red_flag: str
-    price_value: str
-    price_currency: str
-    condition: str
-    buyingOptions: str
-    itemLocation_country: str
-    match: str
-    is_group: str
-    needs_details: str
-    itemWebUrl: str
-    imageUrl: str
-    localizedAspects: Any  # This is a JSON string, can be parsed to List[LocalizedAspect]
 
-class EbayResearch(BaseModel):
-    _id: str
-    name: str
-    results: List[EbayItem]
+class MongoObjectId(BaseModel):
+    """Wrapper for Mongo's ObjectId stored as {"$oid": "..."}."""
 
-class EbayResearchStatsRequest(BaseModel):
-    name: str
-    params: Optional[dict] = None
-    conditions: Optional[List[str]] = None
-    
-class EbayResearchStatsResponse(BaseModel):
-    count: int
-    min: float
-    max: float  
-    mean: float
-    median: float
+    model_config = ConfigDict(populate_by_name=True)
 
-# Add request model for research-items
-class EbayResearchItemsRequest(BaseModel):
-    name: str
-    skip: int = 0
-    limit: int = 10
-    params: Optional[dict] = None
-    conditions: Optional[List[str]] = None
+    oid: str = Field(..., alias="$oid")
 
-# MODEL
 
-class EbayModelItem(BaseModel):
-    itemId: Optional[str] = None
+class MongoDateTime(BaseModel):
+    """Wrapper for Mongo date fields stored as {"$date": iso} ."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    value: datetime = Field(..., alias="$date")
+
+
+class Price(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    value: Decimal
+    currency: Optional[str] = None
+
+
+class ImageAsset(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    imageUrl: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+class ReturnPeriod(BaseModel):
+    value: Optional[int] = None
+    unit: Optional[str] = None
+
+
+class ReturnTerms(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    returnsAccepted: Optional[bool] = None
+    refundMethod: Optional[str] = None
+    returnShippingCostPayer: Optional[str] = None
+    returnPeriod: Optional[ReturnPeriod] = None
+
+
+class ItemDetails(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     title: Optional[str] = None
     condition: Optional[str] = None
-    shortDescription: Optional[str] = None
     conditionDescription: Optional[str] = None
+    shortDescription: Optional[str] = None
     description: Optional[str] = None
+    price: Optional[Price] = None
+    returnTerms: Optional[ReturnTerms] = None
+    buyingOptions: Optional[List[str]] = None
+    image: Optional[ImageAsset] = None
     itemWebUrl: Optional[str] = None
-    imageUrl: Optional[str] = None
-    is_laptop: Optional[bool] = None
-    is_charger_included: Optional[str] = None # "Yes", "No", "Unknown"
-    screen_damage: Optional[str] = None # "None", "Minor", "Major"
-    battery_health: Optional[str] = None # "Good", "Fair", "Poor"
-    keyboard_damage: Optional[str] = None # "None", "Minor", "Major"
-    hosting_damage: Optional[str] = None # "None", "Minor", "Major"
 
-class EbayModelItemsRequest(BaseModel):
+class VariantSpec(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    release_year: Optional[str] = None
+    model_name: Optional[str] = None
+    model_description: Optional[str] = None
+    model_id: Optional[str] = None
+    model_number: Optional[str] = None
+    screen_size: Optional[float] = None
+    part_number: Optional[Union[str, List[str]]] = None
+    color: Optional[Union[str, List[str]]] = None
+    cpu_cores: Optional[int] = None
+    cpu_model: Optional[str] = None
+    cpu_speed: Optional[float] = None
+    ssd_size: Optional[List[int]] = None
+    ram_size: Optional[List[int]] = None
+
+
+class VariantMatch(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    variant: Optional[VariantSpec] = None
+    distance: Optional[float] = None
+    discrepancies: Optional[List[str]] = None
+
+
+class DerivedData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    description: Optional[str] = None
+    laptop_model: Optional[List[str]] = None
+    model_number: Optional[List[str]] = None
+    model_id: Optional[List[str]] = None
+    part_number: Optional[List[str]] = None
+    cpu_model: Optional[List[str]] = None
+    cpu_family: Optional[List[str]] = None
+    cpu_speed: Optional[List[float]] = None
+    ssd_size: Optional[List[int]] = None
+    screen_size: Optional[List[float]] = None
+    ram_size: Optional[List[int]] = None
+    release_year: Optional[List[str]] = None
+    color: Optional[List[str]] = None
+    specs_conflict: Optional[bool] = None
+    variants: Optional[List[VariantMatch]] = None
+    missing: Optional[List[str]] = None
+    min_distance: Optional[float] = None
+    specs_quality: Optional[str] = None
+
+
+class LlmDerived(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    charger: Optional[str] = None
+    battery: Optional[str] = None
+    screen: Optional[str] = None
+    keyboard: Optional[str] = None
+    housing: Optional[str] = None
+    audio: Optional[str] = None
+    ports: Optional[str] = None
+    functionality: Optional[str] = None
+    return_: Optional[str] = Field(default=None, alias="return")
+
+
+class EbayItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    itemId: str
+    details: ItemDetails
+    inserted_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    processed_at: Optional[datetime] = None
+    derived: Optional[DerivedData] = None
+    llm_derived: Optional[LlmDerived] = None
+
+class EbayItemsRequest(BaseModel):
     name: str
     skip: int = 0
     limit: int = 10
-    include_all: bool = False
+    filter: Optional[dict[str, Any]] = None
     
-class EbayModelItemsResponse(BaseModel):
-    items: List[EbayModelItem]
+class FilterValue(BaseModel):
+    value: Any
+    count: int
+
+class EbayItemsResponse(BaseModel):
+    items: List[EbayItem]
     total_count: int
+    available_filters: Optional[Dict[str, List[FilterValue]]] = None
+
+class EbayFilterValuesRequest(BaseModel):
+    name: str
     
-# MODEL UPDATES
-class EbayModelItemUpdateRequest(BaseModel):
-    itemId: str
-    is_laptop: Optional[bool] = None
-    is_charger_included: Optional[str] = None # "Yes", "No", "Unknown"
-    screen_damage: Optional[str] = None # "None", "Minor", "Major"
-    battery_health: Optional[str] = None # "Good", "Fair", "Poor"
-    keyboard_damage: Optional[str] = None # "None", "Minor", "Major"
-    hosting_damage: Optional[str] = None # "None", "Minor", "Major"
-    
-class EbayModelItemUpdateResponse(BaseModel):
-    success: bool
-    message: Optional[str] = None
+class EbayFilterValuesResponse(BaseModel):
+    available_filters: Optional[Dict[str, List[FilterValue]]] = None

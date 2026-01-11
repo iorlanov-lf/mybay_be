@@ -1,11 +1,14 @@
+import copy
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+from pydantic import ValidationError
+
+from bson import ObjectId
 from fastapi import FastAPI, HTTPException, Query
-from models import MsgPayload, \
-        EbayResearchStatsRequest, EbayResearchStatsResponse, \
-        EbayItem, EbayResearchItemsRequest, \
-        EbayModelItemsRequest, EbayModelItemsResponse, EbayModelItem, \
-        EbayModelItemUpdateRequest, EbayModelItemUpdateResponse
-from pymongo import MongoClient
 from fastapi.middleware.cors import CORSMiddleware
+from models import EbayFilterValuesRequest, EbayFilterValuesResponse, EbayItem, EbayItemsRequest, EbayItemsResponse
+from pymongo import MongoClient
 
 app = FastAPI()
 # Add CORS middleware to allow all origins
@@ -17,13 +20,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-messages_list: dict[int, MsgPayload] = {}
-
 # MongoDB connection setup
 client = MongoClient("mongodb://localhost:27017/")
 db = client["mybaydb"]
 researches_collection = db["researches"]
-
 
 
 @app.get("/")
@@ -36,191 +36,238 @@ def root() -> dict[str, str]:
 def about() -> dict[str, str]:
     return {"message": "This is the about page."}
 
-
-# Route to add a message
-@app.post("/messages/{msg_name}/")
-def add_msg(msg_name: str) -> dict[str, MsgPayload]:
-    # Generate an ID for the item based on the highest ID in the messages_list
-    msg_id = max(messages_list.keys()) + 1 if messages_list else 0
-    messages_list[msg_id] = MsgPayload(msg_id=msg_id, msg_name=msg_name)
-
-    return {"message": messages_list[msg_id]}
-
-
-# Route to list all messages
-@app.get("/messages")
-def message_items() -> dict[str, dict[int, MsgPayload]]:
-    return {"messages:": messages_list}
-
-
-
-@app.post("/ebay/research-stats", response_model=EbayResearchStatsResponse)
-def ebay_research_stats(request: EbayResearchStatsRequest) -> EbayResearchStatsResponse:
-    doc = researches_collection.find_one({"name": request.name})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Research not found")
+def _document_to_ebay_item(doc: dict[str, Any]) -> EbayItem:
+    model_fields = getattr(EbayItem, "model_fields", None)
+    allowed_fields = set(model_fields.keys()) if model_fields else set(getattr(EbayItem, "__fields__", {}).keys())
+    merged = doc
+    payload = merged if not allowed_fields else {k: v for k, v in merged.items() if k in allowed_fields}
     
-    if request.params:
-        # Apply any additional filtering based on params if needed
-        # This is a placeholder for future implementation
-        if request.params.get("screen_size"):
-            doc["results"] = [item for item in doc.get("results", []) if item.get("screen_size") == request.params["screen_size"]]  
-        if request.params.get("ram"):
-            doc["results"] = [item for item in doc.get("results", []) if item.get("ram") == request.params["ram"]]
-        if request.params.get("ssd"):
-            doc["results"] = [item for item in doc.get("results", []) if item.get("hdd") == request.params["ssd"]]  
-        # Filter by conditions if provided
-        if request.params.get("conditions"):
-            doc["results"] = [item for item in doc.get("results", []) if item.get("condition") in request.params.get("conditions")]
+    try:
+        ebay_item = EbayItem.model_validate(payload)
+    except ValidationError as e:
+        error_details = e.errors()
+        missing_fields = []
+        for error in error_details:
+            # Check if the error type is 'value_error.missing'
+            if error['type'] == 'value_error.missing' or error['msg'] == 'Field required':
+                # The location ('loc') is a tuple, the last element is the field name
+                field_name = error['loc'][-1]
+                missing_fields.append(field_name)
+
+        print(f"Missing fields: {missing_fields}")
+        raise HTTPException(status_code=400, detail=str(e))
+    return ebay_item
+
+def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not filter_data:
+        return None
+    query: Dict[str, Any] = {"$and": []}
+
+    def _append_derived_or_variant_filter(field_name: str, raw_value: Any) -> None:
+        values = (
+            list(raw_value)
+            if isinstance(raw_value, Iterable) and not isinstance(raw_value, (str, bytes, bytearray))
+            else [raw_value]
+        )
+        query["$and"].append(
+            {
+                "$or": [
+                    {f"derived.{field_name}": {"$in": values}},
+                    {
+                        "$and": [
+                            {f"derived.{field_name}": {"$nin": values}},
+                            {
+                                "derived.variants": {
+                                    "$elemMatch": {
+                                        "variant.distance": {"$lte": 1},
+                                        f"variant.{field_name}": {"$in": values},
+                                    }
+                                }
+                            },
+                        ]
+                    },
+                ]
+            }
+        )
+
+    # derived and variant fields
+    for derived_field in [
+        "release_year",
+        "laptop_model",
+        "model_number",
+        "model_id",
+        "part_number",
+        "cpu_model",
+        "cpu_family",
+        "cpu_speed",
+        "ssd_size",
+        "screen_size",
+        "ram_size",
+        "color",
+        "specs_conflict"
+    ]:
+        if value := filter_data.get(derived_field):
+            _append_derived_or_variant_filter(derived_field, value)
+    
+    # llm_derived fields
+    for llm_field in [
+        "charger",
+        "battery",
+        "screen",
+        "keyboard",
+        "housing",
+        "audio",
+        "ports",
+        "functionality",
+        "component_listing"
+    ]:
+        if value := filter_data.get(llm_field):
+            query["$and"].append({f"llm_derived.{llm_field}": {"$in": value if isinstance(value, list) else [value]}})
+
+    # details fields
+    if (value := filter_data.get("returnable")) is not None:
+        query["$and"].append({"details.returnTerms.returnsAccepted": value})
         
-    count = len(doc.get("results", []))
-    # Treat price_value as number for calculations
-    prices = [float(item['price_value']) for item in doc.get("results", [])]
-    min_price = min(prices) if prices else 0
-    max_price = max(prices) if prices else 0
-    mean_price = sum(prices) / len(prices) if prices else 0
-    median_price = sorted(prices)[(len(prices) - 1) // 2] if prices else 0
+    if (value := filter_data.get("condition")) is not None:
+        query["$and"].append({"details.condition": value})
     
-    return EbayResearchStatsResponse(count=count, min=min_price, max=max_price, mean=mean_price, median=median_price)
+    return query if query["$and"] else None
 
+def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
+    derived_fields = [
+        "release_year",
+        "laptop_model",
+        "model_number",
+        "model_id",
+        "part_number",
+        "cpu_model",
+        "cpu_family",
+        "cpu_speed",
+        "ssd_size",
+        "screen_size",
+        "ram_size",
+        "color",
+        "specs_conflict"
+    ]
+    llm_fields = [
+        "charger",
+        "battery",
+        "screen",
+        "keyboard",
+        "housing",
+        "audio",
+        "ports",
+        "functionality",
+        "component_listing"
+    ]
+    details_fields = [
+        "returnable",
+        "condition"
+    ]
+    target_fields = derived_fields + llm_fields + details_fields
+    value_counts: Dict[str, Dict[Any, int]] = {field: {} for field in target_fields}
 
+    for doc in docs:
+        doc_values: Dict[str, set[Any]] = {field: set() for field in target_fields}
 
-# New endpoint for paginated EbayItem list
-@app.post("/ebay/research-items", response_model=list[EbayItem])
-def ebay_research_items(request: EbayResearchItemsRequest):
-    doc = researches_collection.find_one({"name": request.name})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Research not found")
-    
-    if request.params:
-        # Apply any additional filtering based on params if needed
-        # This is a placeholder for future implementation
-        if request.params.get("screen_size"):
-            doc["results"] = [item for item in doc.get("results", []) if item.get("screen_size") == request.params["screen_size"]]  
-        if request.params.get("ram"):
-            doc["results"] = [item for item in doc.get("results", []) if item.get("ram") == request.params["ram"]]
-        if request.params.get("ssd"):
-            doc["results"] = [item for item in doc.get("results", []) if item.get("hdd") == request.params["ssd"]]  
-        # Filter by conditions if provided
-        if request.params.get("conditions"):
-            doc["results"] = [item for item in doc.get("results", []) if item.get("condition") in request.params.get("conditions")]
+        def _collect(field: str, raw_value: Any) -> None:
+            if raw_value is None:
+                return
+
+            def _add(val: Any) -> None:
+                if val is not None:
+                    doc_values[field].add(val)
+
+            if isinstance(raw_value, Iterable) and not isinstance(raw_value, (str, bytes, bytearray)):
+                for item in raw_value:
+                    _add(item)
+            else:
+                _add(raw_value)
+
+        derived = doc.get("derived") or {}
+        llm_derived = doc.get("llm_derived") or {}
+        details = doc.get("details") or {}
+        for field in derived_fields:
+            _collect(field, derived.get(field))
+        for field in llm_fields:
+            _collect(field, llm_derived.get(field))
+        _collect("returnable", details.get("returnTerms", {}).get("returnsAccepted"))
+        _collect("condition", details.get("condition"))
         
-    items = doc.get("results", [])
-    # Sort items by price_value ascending
-    items = sorted(items, key=lambda x: float(x.get("price_value", 0)))
-    skip = max(request.skip, 0)
-    limit = min(max(request.limit, 1), 100)
-    paginated_items = items[skip:skip+limit]
-    for item in paginated_items:
-        item.pop("_id", None)
-    return paginated_items
+        for variant_entry in derived.get("variants") or []:
+            if variant_entry["distance"] > 1:
+                continue
+            variant_data = variant_entry.get("variant")
+            if isinstance(variant_data, dict):
+                for field in derived_fields:
+                    if not derived.get(field):
+                        _collect(field, variant_data.get(field))
 
+        for field, counts in value_counts.items():
+            for val in doc_values[field]:
+                counts[val] = counts.get(val, 0) + 1
 
-@app.post("/ebay/model-items", response_model=EbayModelItemsResponse)
-def ebay_model_items(request: EbayModelItemsRequest):
+    return {
+        field: [
+            {"value": val, "count": count}
+            for val, count in sorted(counts.items(), key=lambda item: str(item[0]))
+        ]
+        for field, counts in value_counts.items()
+        if counts
+    }
+
+@app.post("/ebay/items", response_model=EbayItemsResponse)
+def ebay_items(request: EbayItemsRequest):
     try:
         collection = None
         if request.name == "MacBookPro":
             collection = db["mac_book_pro"]
         if collection is None:
             raise HTTPException(status_code=404, detail="Model collection not found")
+       
         all_items = []
-        for doc in collection.find():
-            if request.include_all:
+        if not request.filter:
+            for doc in collection.find():
                 all_items.append(doc)
-            else:
-                if doc.get("is_laptop") in [None, True] and \
-                    (not doc.get("is_charger_included") or \
-                    not doc.get("screen_damage") or \
-                    not doc.get("battery_health") or \
-                    not doc.get("keyboard_damage") or \
-                    not doc.get("hosting_damage")):
-                        all_items.append(doc)
-        # Sort items by price_value ascending
+        else:
+            query = _compose_query(request.filter) or {}
+            for doc in collection.find(query):
+                all_items.append(doc)
+        
+        # Sort and paginate
         all_items = sorted(all_items, key=lambda x: x.get("itemId"))
+        available_filters = _available_filter_values(all_items)
         skip = max(request.skip, 0)
         limit = min(max(request.limit, 1), 100)
         paginated_items = all_items[skip:skip+limit]
-        ret_value = EbayModelItemsResponse(
-            items=[],
-            total_count=len(all_items)
+        items = [_document_to_ebay_item(item) for item in paginated_items]
+        return EbayItemsResponse(
+            items=items,
+            total_count=len(all_items),
+            available_filters=available_filters or None,
         )
-        for item in paginated_items:
-            ebayModelItem = EbayModelItem(
-                itemId=item.get("itemId"),
-                title=item.get("title"),
-                condition=item.get("condition", None),
-                
-                shortDescription=item.get("shortDescription", ""),
-                conditionDescription=item.get("conditionDescription", ""),
-                description=item.get("description", ""),
-                itemWebUrl=item.get("itemWebUrl", ""),
-                imageUrl=item.get("image").get("imageUrl") if item.get("image") else None,
-                is_laptop=item.get("is_laptop", None),
-                is_charger_included=item.get("is_charger_included", None),
-                screen_damage=item.get("screen_damage", None),
-                battery_health=item.get("battery_health", None),
-                keyboard_damage=item.get("keyboard_damage", None),
-                hosting_damage=item.get("hosting_damage", None)
-            )
-            ret_value.items.append(ebayModelItem)
-            print(item.get("is_laptop"))
-
-        return ret_value
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.post("/ebay/update-model-item", response_model=EbayModelItemUpdateResponse)
-def update_model_item(request: EbayModelItemUpdateRequest):
+@app.post("/ebay/filter_values", response_model=EbayFilterValuesResponse)
+def ebay_filter_values(request: EbayFilterValuesRequest):
     try:
-        # For now, we only support MacBookPro collection
-        # This could be extended to support other models in the future
-        collection = db["mac_book_pro"]
+        collection = None
+        if request.name == "MacBookPro":
+            collection = db["mac_book_pro"]
+        if collection is None:
+            raise HTTPException(status_code=404, detail="Model collection not found")
+       
+        all_items = []
         
-        # Find the item by itemId
-        existing_item = collection.find_one({"itemId": request.itemId})
-        if not existing_item:
-            raise HTTPException(status_code=404, detail="Item not found")
+        for doc in collection.find():
+            all_items.append(doc)
         
-        # Prepare update fields - only include fields that are not None
-        update_fields = {}
-        if request.is_laptop is not None:
-            update_fields["is_laptop"] = request.is_laptop
-        if request.is_charger_included is not None:
-            update_fields["is_charger_included"] = request.is_charger_included
-        if request.screen_damage is not None:
-            update_fields["screen_damage"] = request.screen_damage
-        if request.battery_health is not None:
-            update_fields["battery_health"] = request.battery_health
-        if request.keyboard_damage is not None:
-            update_fields["keyboard_damage"] = request.keyboard_damage
-        if request.hosting_damage is not None:
-            update_fields["hosting_damage"] = request.hosting_damage
+        available_filters = _available_filter_values(all_items)
         
-        # If no fields to update, return error
-        if not update_fields:
-            raise HTTPException(status_code=400, detail="No valid fields provided for update")
-        
-        # Update the item in MongoDB
-        result = collection.update_one(
-            {"itemId": request.itemId},
-            {"$set": update_fields}
+        return EbayFilterValuesResponse(
+            available_filters=available_filters or None,
         )
-        
-        if result.modified_count == 0:
-            return EbayModelItemUpdateResponse(
-                success=False,
-                message="No changes were made to the item"
-            )
-        
-        return EbayModelItemUpdateResponse(
-            success=True,
-            message=f"Item {request.itemId} updated successfully"
-        )
-    
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
