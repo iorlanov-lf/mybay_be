@@ -79,7 +79,7 @@ def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
                             {
                                 "derived.variants": {
                                     "$elemMatch": {
-                                        "variant.distance": {"$lte": 1},
+                                        "distance": {"$lte": 1},
                                         f"variant.{field_name}": {"$in": values},
                                     }
                                 }
@@ -125,11 +125,11 @@ def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
             query["$and"].append({f"llm_derived.{llm_field}": {"$in": value if isinstance(value, list) else [value]}})
 
     # details fields
-    if (value := filter_data.get("returnable")) is not None:
-        query["$and"].append({"details.returnTerms.returnsAccepted": value})
+    if value := filter_data.get("returnable"):
+        query["$and"].append({"details.returnTerms.returnsAccepted": {"$in": value}})
         
-    if (value := filter_data.get("condition")) is not None:
-        query["$and"].append({"details.condition": value})
+    if value := filter_data.get("condition"):
+        query["$and"].append({"details.condition": {"$in": value}})
     
     return query if query["$and"] else None
 
