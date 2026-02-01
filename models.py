@@ -153,14 +153,22 @@ class EbayItemsRequest(BaseModel):
     skip: int = 0
     limit: int = 10
     filter: Optional[dict[str, Any]] = None
+    sort_specs: Optional[List[dict[str, Any]]] = None
     
 class FilterValue(BaseModel):
     value: Any
     count: int
 
+class Stats(BaseModel):
+    min: Optional[Decimal] = None
+    max: Optional[Decimal] = None
+    median: Optional[Decimal] = None
+    mean: Optional[Decimal] = None
+    count: Optional[int] = None
+    
 class EbayItemsResponse(BaseModel):
     items: List[EbayItem]
-    total_count: int
+    stats: Stats
     available_filters: Optional[Dict[str, List[FilterValue]]] = None
 
 class EbayFilterValuesRequest(BaseModel):

@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from bson import ObjectId
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from models import EbayFilterValuesRequest, EbayFilterValuesResponse, EbayItem, EbayItemsRequest, EbayItemsResponse
+from models import EbayFilterValuesRequest, EbayFilterValuesResponse, EbayItem, EbayItemsRequest, EbayItemsResponse, Stats
 from pymongo import MongoClient
 
 app = FastAPI()
@@ -216,6 +216,58 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
         if counts
     }
 
+def _compose_sort_specs(sort_specs: Optional[List[Dict[str, Any]]]) -> List[tuple[str, int]]:
+    
+    derived_fields = [
+        "price",
+        "release_year",
+        "laptop_model",
+        "model_number",
+        "model_id",
+        "part_number",
+        "cpu_model",
+        "cpu_family",
+        "cpu_speed",
+        "ssd_size",
+        "screen_size",
+        "ram_size",
+        "color",
+        "specs_conflict"
+    ]
+    llm_fields = [
+        "charger",
+        "battery",
+        "screen",
+        "keyboard",
+        "housing",
+        "audio",
+        "ports",
+        "functionality",
+        "component_listing"
+    ]
+    details_fields = [
+        "returnable",
+        "condition"
+    ]
+    
+    default = [("derived.price", 1)]
+    mongo_sort_specs = []
+    for spec in sort_specs:
+        field = spec.get("field")
+        if field in derived_fields:
+            mongo_sort_specs.append((f"derived.{field}", spec.get("direction", 1)))
+        elif field in llm_fields:
+            mongo_sort_specs.append((f"llm_derived.{field}", spec.get("direction", 1)))
+        elif field in details_fields:
+            if field == "returnable":
+                mongo_sort_specs.append((f"details.returnTerms.returnsAccepted", spec.get("direction", 1)))
+            else:
+                mongo_sort_specs.append((f"details.{field}", spec.get("direction", 1)))
+    if mongo_sort_specs:
+        return mongo_sort_specs
+    else:
+        return default
+
 @app.post("/ebay/items", response_model=EbayItemsResponse)
 def ebay_items(request: EbayItemsRequest):
     try:
@@ -226,24 +278,36 @@ def ebay_items(request: EbayItemsRequest):
             raise HTTPException(status_code=404, detail="Model collection not found")
        
         all_items = []
+        mongo_sort_specs = _compose_sort_specs(request.sort_specs)
         if not request.filter:
-            for doc in collection.find():
+            for doc in collection.find().sort(mongo_sort_specs):
                 all_items.append(doc)
         else:
             query = _compose_query(request.filter) or {}
-            for doc in collection.find(query):
+            for doc in collection.find(query).sort(mongo_sort_specs):
                 all_items.append(doc)
         
         # Sort and paginate
-        all_items = sorted(all_items, key=lambda x: x.get("itemId"))
+        #all_items = sorted(all_items, key=lambda x: x.get("itemId"))
         available_filters = _available_filter_values(all_items)
         skip = max(request.skip, 0)
         limit = min(max(request.limit, 1), 100)
         paginated_items = all_items[skip:skip+limit]
         items = [_document_to_ebay_item(item) for item in paginated_items]
+        
+        prices = [item["derived"]["price"] for item in all_items if item["derived"] and item["derived"]["price"] is not None]
+        stats = Stats(
+            min=min(prices) if prices else None,
+            max=max(prices) if prices else None,
+            median=(sorted(prices)[len(prices)//2] if len(prices) % 2 == 1 else
+                    (sorted(prices)[len(prices)//2 - 1] + sorted(prices)[len(prices)//2]) / 2) if prices else None,
+            mean=(sum(prices) / len(prices)) if prices else None,
+            count=len(prices) if prices else None,
+        )
+        
         return EbayItemsResponse(
             items=items,
-            total_count=len(all_items),
+            stats=stats,
             available_filters=available_filters or None,
         )
     except Exception as e:
