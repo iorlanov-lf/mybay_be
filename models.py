@@ -100,9 +100,10 @@ class VariantMatch(BaseModel):
 
 
 class DerivedData(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     description: Optional[str] = None
+    price: Optional[float] = None
     laptopModel: Optional[List[str]] = None
     modelNumber: Optional[List[str]] = None
     modelId: Optional[List[str]] = None
@@ -123,7 +124,7 @@ class DerivedData(BaseModel):
 
 
 class LlmDerived(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     charger: Optional[str] = None
     battery: Optional[str] = None

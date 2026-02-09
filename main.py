@@ -150,7 +150,8 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
         "screenSize",
         "ramSize",
         "color",
-        "specsConflict"
+        "specsConflict",
+        "specsQuality"
     ]
     llm_fields = [
         "charger",
@@ -221,6 +222,21 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
 
 def _compose_sort_specs(sort_specs: Optional[List[Dict[str, Any]]]) -> List[tuple[str, int]]:
 
+    # Categorical fields that sort on rank instead of string value
+    RANK_SORT_MAP = {
+        "screen": "llmDerived.screenRank",
+        "keyboard": "llmDerived.keyboardRank",
+        "housing": "llmDerived.housingRank",
+        "audio": "llmDerived.audioRank",
+        "ports": "llmDerived.portsRank",
+        "battery": "llmDerived.batteryRank",
+        "functionality": "llmDerived.functionalityRank",
+        "charger": "llmDerived.chargerRank",
+        "componentListing": "llmDerived.componentListingRank",
+        "condition": "derived.conditionRank",
+        "specsQuality": "derived.specsQualityRank",
+    }
+
     derived_fields = [
         "price",
         "releaseYear",
@@ -235,7 +251,8 @@ def _compose_sort_specs(sort_specs: Optional[List[Dict[str, Any]]]) -> List[tupl
         "screenSize",
         "ramSize",
         "color",
-        "specsConflict"
+        "specsConflict",
+        "specsQuality"
     ]
     llm_fields = [
         "charger",
@@ -259,15 +276,18 @@ def _compose_sort_specs(sort_specs: Optional[List[Dict[str, Any]]]) -> List[tupl
     mongo_sort_specs = []
     for spec in sort_specs:
         field = spec.get("field")
-        if field in derived_fields:
-            mongo_sort_specs.append((f"derived.{field}", spec.get("direction", 1)))
+        direction = spec.get("direction", 1)
+        if field in RANK_SORT_MAP:
+            mongo_sort_specs.append((RANK_SORT_MAP[field], direction))
+        elif field in derived_fields:
+            mongo_sort_specs.append((f"derived.{field}", direction))
         elif field in llm_fields:
-            mongo_sort_specs.append((f"llmDerived.{field}", spec.get("direction", 1)))
+            mongo_sort_specs.append((f"llmDerived.{field}", direction))
         elif field in details_fields:
             if field == "returnable":
-                mongo_sort_specs.append((f"details.returnTerms.returnsAccepted", spec.get("direction", 1)))
+                mongo_sort_specs.append(("details.returnTerms.returnsAccepted", direction))
             else:
-                mongo_sort_specs.append((f"details.{field}", spec.get("direction", 1)))
+                mongo_sort_specs.append((f"details.{field}", direction))
     if mongo_sort_specs:
         return mongo_sort_specs
     else:
