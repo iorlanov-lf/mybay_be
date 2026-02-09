@@ -51,13 +51,13 @@ This is a FastAPI backend serving eBay item data from MongoDB. It provides REST 
 - `itemId` - Unique eBay identifier
 - `details` - eBay catalog data (title, price, condition, URL)
 - `derived` - Regex-extracted specs (CPU, RAM, SSD, screen size, model info)
-- `llm_derived` - AI-analyzed condition (screen, keyboard, battery, functionality)
+- `llmDerived` - AI-analyzed condition (screen, keyboard, battery, functionality)
 
 ### Filter System
 
 Supports filtering on three field categories:
-- **Derived fields**: `release_year`, `laptop_model`, `cpu_model`, `ssd_size`, `ram_size`, `screen_size`, `color`
-- **LLM-derived fields**: `charger`, `battery`, `screen`, `keyboard`, `housing`, `functionality`, `component_listing`
+- **Derived fields**: `releaseYear`, `laptopModel`, `cpuModel`, `ssdSize`, `ramSize`, `screenSize`, `color`
+- **LLM-derived fields**: `charger`, `battery`, `screen`, `keyboard`, `housing`, `functionality`, `componentListing`
 - **Details fields**: `returnable`, `condition`
 
 Filter logic supports variant matching with distance threshold and OR logic between direct matches and variants.

@@ -70,26 +70,25 @@ class ItemDetails(BaseModel):
     description: Optional[str] = None
     price: Optional[Price] = None
     returnTerms: Optional[ReturnTerms] = None
-    buyingOptions: Optional[List[str]] = None
     image: Optional[ImageAsset] = None
     itemWebUrl: Optional[str] = None
 
 class VariantSpec(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    release_year: Optional[str] = None
-    model_name: Optional[str] = None
-    model_description: Optional[str] = None
-    model_id: Optional[str] = None
-    model_number: Optional[str] = None
-    screen_size: Optional[float] = None
-    part_number: Optional[Union[str, List[str]]] = None
+    releaseYear: Optional[str] = None
+    modelName: Optional[str] = None
+    modelDescription: Optional[str] = None
+    modelId: Optional[str] = None
+    modelNumber: Optional[str] = None
+    screenSize: Optional[float] = None
+    partNumber: Optional[Union[str, List[str]]] = None
     color: Optional[Union[str, List[str]]] = None
-    cpu_cores: Optional[int] = None
-    cpu_model: Optional[str] = None
-    cpu_speed: Optional[float] = None
-    ssd_size: Optional[List[int]] = None
-    ram_size: Optional[List[int]] = None
+    cpuCores: Optional[int] = None
+    cpuModel: Optional[str] = None
+    cpuSpeed: Optional[float] = None
+    ssdSize: Optional[List[int]] = None
+    ramSize: Optional[List[int]] = None
 
 
 class VariantMatch(BaseModel):
@@ -104,23 +103,23 @@ class DerivedData(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     description: Optional[str] = None
-    laptop_model: Optional[List[str]] = None
-    model_number: Optional[List[str]] = None
-    model_id: Optional[List[str]] = None
-    part_number: Optional[List[str]] = None
-    cpu_model: Optional[List[str]] = None
-    cpu_family: Optional[List[str]] = None
-    cpu_speed: Optional[List[float]] = None
-    ssd_size: Optional[List[int]] = None
-    screen_size: Optional[List[float]] = None
-    ram_size: Optional[List[int]] = None
-    release_year: Optional[List[str]] = None
+    laptopModel: Optional[List[str]] = None
+    modelNumber: Optional[List[str]] = None
+    modelId: Optional[List[str]] = None
+    partNumber: Optional[List[str]] = None
+    cpuModel: Optional[List[str]] = None
+    cpuFamily: Optional[List[str]] = None
+    cpuSpeed: Optional[List[float]] = None
+    ssdSize: Optional[List[int]] = None
+    screenSize: Optional[List[float]] = None
+    ramSize: Optional[List[int]] = None
+    releaseYear: Optional[List[str]] = None
     color: Optional[List[str]] = None
-    specs_conflict: Optional[bool] = None
+    specsConflict: Optional[bool] = None
     variants: Optional[List[VariantMatch]] = None
     missing: Optional[List[str]] = None
-    min_distance: Optional[float] = None
-    specs_quality: Optional[str] = None
+    minDistance: Optional[float] = None
+    specsQuality: Optional[str] = None
 
 
 class LlmDerived(BaseModel):
@@ -134,6 +133,7 @@ class LlmDerived(BaseModel):
     audio: Optional[str] = None
     ports: Optional[str] = None
     functionality: Optional[str] = None
+    componentListing: Optional[str] = None
     return_: Optional[str] = Field(default=None, alias="return")
 
 
@@ -142,18 +142,18 @@ class EbayItem(BaseModel):
 
     itemId: str
     details: ItemDetails
-    inserted_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    processed_at: Optional[datetime] = None
+    insertedAt: Optional[datetime] = None
+    updatedAt: Optional[datetime] = None
+    processedAt: Optional[datetime] = None
     derived: Optional[DerivedData] = None
-    llm_derived: Optional[LlmDerived] = None
+    llmDerived: Optional[LlmDerived] = None
 
 class EbayItemsRequest(BaseModel):
     name: str
     skip: int = 0
     limit: int = 10
     filter: Optional[dict[str, Any]] = None
-    sort_specs: Optional[List[dict[str, Any]]] = None
+    sortSpecs: Optional[List[dict[str, Any]]] = None
     
 class FilterValue(BaseModel):
     value: Any
@@ -169,10 +169,10 @@ class Stats(BaseModel):
 class EbayItemsResponse(BaseModel):
     items: List[EbayItem]
     stats: Stats
-    available_filters: Optional[Dict[str, List[FilterValue]]] = None
+    availableFilters: Optional[Dict[str, List[FilterValue]]] = None
 
 class EbayFilterValuesRequest(BaseModel):
     name: str
     
 class EbayFilterValuesResponse(BaseModel):
-    available_filters: Optional[Dict[str, List[FilterValue]]] = None
+    availableFilters: Optional[Dict[str, List[FilterValue]]] = None

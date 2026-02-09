@@ -23,7 +23,6 @@ app.add_middleware(
 # MongoDB connection setup
 client = MongoClient("mongodb://localhost:27017/")
 db = client["mybaydb"]
-researches_collection = db["researches"]
 
 
 @app.get("/")
@@ -92,24 +91,25 @@ def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
 
     # derived and variant fields
     for derived_field in [
-        "release_year",
-        "laptop_model",
-        "model_number",
-        "model_id",
-        "part_number",
-        "cpu_model",
-        "cpu_family",
-        "cpu_speed",
-        "ssd_size",
-        "screen_size",
-        "ram_size",
+        "releaseYear",
+        "laptopModel",
+        "modelNumber",
+        "modelId",
+        "partNumber",
+        "cpuModel",
+        "cpuFamily",
+        "cpuSpeed",
+        "ssdSize",
+        "screenSize",
+        "ramSize",
         "color",
-        "specs_conflict"
+        "specsConflict"
     ]:
-        if value := filter_data.get(derived_field):
+        value = filter_data.get(derived_field)
+        if value is not None and value != []:
             _append_derived_or_variant_filter(derived_field, value)
-    
-    # llm_derived fields
+
+    # llmDerived fields
     for llm_field in [
         "charger",
         "battery",
@@ -119,35 +119,38 @@ def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
         "audio",
         "ports",
         "functionality",
-        "component_listing"
+        "componentListing"
     ]:
-        if value := filter_data.get(llm_field):
-            query["$and"].append({f"llm_derived.{llm_field}": {"$in": value if isinstance(value, list) else [value]}})
+        value = filter_data.get(llm_field)
+        if value is not None and value != []:
+            query["$and"].append({f"llmDerived.{llm_field}": {"$in": value if isinstance(value, list) else [value]}})
 
     # details fields
-    if value := filter_data.get("returnable"):
+    value = filter_data.get("returnable")
+    if value is not None and value != []:
         query["$and"].append({"details.returnTerms.returnsAccepted": {"$in": value}})
-        
-    if value := filter_data.get("condition"):
+
+    value = filter_data.get("condition")
+    if value is not None and value != []:
         query["$and"].append({"details.condition": {"$in": value}})
     
     return query if query["$and"] else None
 
 def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
     derived_fields = [
-        "release_year",
-        "laptop_model",
-        "model_number",
-        "model_id",
-        "part_number",
-        "cpu_model",
-        "cpu_family",
-        "cpu_speed",
-        "ssd_size",
-        "screen_size",
-        "ram_size",
+        "releaseYear",
+        "laptopModel",
+        "modelNumber",
+        "modelId",
+        "partNumber",
+        "cpuModel",
+        "cpuFamily",
+        "cpuSpeed",
+        "ssdSize",
+        "screenSize",
+        "ramSize",
         "color",
-        "specs_conflict"
+        "specsConflict"
     ]
     llm_fields = [
         "charger",
@@ -158,7 +161,7 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
         "audio",
         "ports",
         "functionality",
-        "component_listing"
+        "componentListing"
     ]
     details_fields = [
         "returnable",
@@ -185,15 +188,15 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
                 _add(raw_value)
 
         derived = doc.get("derived") or {}
-        llm_derived = doc.get("llm_derived") or {}
+        llmDerived = doc.get("llmDerived") or {}
         details = doc.get("details") or {}
         for field in derived_fields:
             _collect(field, derived.get(field))
         for field in llm_fields:
-            _collect(field, llm_derived.get(field))
+            _collect(field, llmDerived.get(field))
         _collect("returnable", details.get("returnTerms", {}).get("returnsAccepted"))
         _collect("condition", details.get("condition"))
-        
+
         for variant_entry in derived.get("variants") or []:
             if variant_entry["distance"] > 1:
                 continue
@@ -210,29 +213,29 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
     return {
         field: [
             {"value": val, "count": count}
-            for val, count in sorted(counts.items(), key=lambda item: str(item[0]))
+            for val, count in sorted(counts.items(), key=lambda item: (isinstance(item[0], str), item[0]))
         ]
         for field, counts in value_counts.items()
         if counts
     }
 
 def _compose_sort_specs(sort_specs: Optional[List[Dict[str, Any]]]) -> List[tuple[str, int]]:
-    
+
     derived_fields = [
         "price",
-        "release_year",
-        "laptop_model",
-        "model_number",
-        "model_id",
-        "part_number",
-        "cpu_model",
-        "cpu_family",
-        "cpu_speed",
-        "ssd_size",
-        "screen_size",
-        "ram_size",
+        "releaseYear",
+        "laptopModel",
+        "modelNumber",
+        "modelId",
+        "partNumber",
+        "cpuModel",
+        "cpuFamily",
+        "cpuSpeed",
+        "ssdSize",
+        "screenSize",
+        "ramSize",
         "color",
-        "specs_conflict"
+        "specsConflict"
     ]
     llm_fields = [
         "charger",
@@ -243,21 +246,23 @@ def _compose_sort_specs(sort_specs: Optional[List[Dict[str, Any]]]) -> List[tupl
         "audio",
         "ports",
         "functionality",
-        "component_listing"
+        "componentListing"
     ]
     details_fields = [
         "returnable",
         "condition"
     ]
-    
+
     default = [("derived.price", 1)]
+    if not sort_specs:
+        return default
     mongo_sort_specs = []
     for spec in sort_specs:
         field = spec.get("field")
         if field in derived_fields:
             mongo_sort_specs.append((f"derived.{field}", spec.get("direction", 1)))
         elif field in llm_fields:
-            mongo_sort_specs.append((f"llm_derived.{field}", spec.get("direction", 1)))
+            mongo_sort_specs.append((f"llmDerived.{field}", spec.get("direction", 1)))
         elif field in details_fields:
             if field == "returnable":
                 mongo_sort_specs.append((f"details.returnTerms.returnsAccepted", spec.get("direction", 1)))
@@ -278,7 +283,7 @@ def ebay_items(request: EbayItemsRequest):
             raise HTTPException(status_code=404, detail="Model collection not found")
        
         all_items = []
-        mongo_sort_specs = _compose_sort_specs(request.sort_specs)
+        mongo_sort_specs = _compose_sort_specs(request.sortSpecs)
         if not request.filter:
             for doc in collection.find().sort(mongo_sort_specs):
                 all_items.append(doc)
@@ -287,8 +292,6 @@ def ebay_items(request: EbayItemsRequest):
             for doc in collection.find(query).sort(mongo_sort_specs):
                 all_items.append(doc)
         
-        # Sort and paginate
-        #all_items = sorted(all_items, key=lambda x: x.get("itemId"))
         available_filters = _available_filter_values(all_items)
         skip = max(request.skip, 0)
         limit = min(max(request.limit, 1), 100)
@@ -308,7 +311,7 @@ def ebay_items(request: EbayItemsRequest):
         return EbayItemsResponse(
             items=items,
             stats=stats,
-            available_filters=available_filters or None,
+            availableFilters=available_filters or None,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -330,7 +333,7 @@ def ebay_filter_values(request: EbayFilterValuesRequest):
         available_filters = _available_filter_values(all_items)
         
         return EbayFilterValuesResponse(
-            available_filters=available_filters or None,
+            availableFilters=available_filters or None,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
