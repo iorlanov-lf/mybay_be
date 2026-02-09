@@ -5,9 +5,11 @@ from typing import Any, Dict, List, Optional
 from pydantic import ValidationError
 
 from bson import ObjectId
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from models import EbayFilterValuesRequest, EbayFilterValuesResponse, EbayItem, EbayItemsRequest, EbayItemsResponse, Stats
+from fastapi.responses import JSONResponse
+from models import EbayFilterValuesRequest, EbayFilterValuesResponse, EbayItem, EbayItemsRequest, EbayItemsResponse, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse
 from pymongo import MongoClient
 
 app = FastAPI()
@@ -19,6 +21,48 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    details = [
+        ErrorDetail(
+            loc=list(err.get("loc", [])),
+            msg=err.get("msg", ""),
+            type=err.get("type", ""),
+        )
+        for err in exc.errors()
+    ]
+    body = ErrorResponse(
+        error=ErrorEnvelope(
+            code="VALIDATION_ERROR",
+            message="Request validation failed",
+            details=details,
+        )
+    )
+    return JSONResponse(status_code=422, content=body.model_dump())
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    body = ErrorResponse(
+        error=ErrorEnvelope(
+            code=f"HTTP_{exc.status_code}",
+            message=str(exc.detail),
+        )
+    )
+    return JSONResponse(status_code=exc.status_code, content=body.model_dump())
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    body = ErrorResponse(
+        error=ErrorEnvelope(
+            code="INTERNAL_ERROR",
+            message=str(exc),
+        )
+    )
+    return JSONResponse(status_code=500, content=body.model_dump())
+
 
 # MongoDB connection setup
 client = MongoClient("mongodb://localhost:27017/")
@@ -295,29 +339,30 @@ def _compose_sort_specs(sort_specs: Optional[List[Dict[str, Any]]]) -> List[tupl
 
 @app.post("/ebay/items", response_model=EbayItemsResponse)
 def ebay_items(request: EbayItemsRequest):
-    try:
-        collection = None
-        if request.name == "MacBookPro":
-            collection = db["mac_book_pro"]
-        if collection is None:
-            raise HTTPException(status_code=404, detail="Model collection not found")
-       
-        all_items = []
-        mongo_sort_specs = _compose_sort_specs(request.sortSpecs)
-        if not request.filter:
-            for doc in collection.find().sort(mongo_sort_specs):
-                all_items.append(doc)
-        else:
-            query = _compose_query(request.filter) or {}
-            for doc in collection.find(query).sort(mongo_sort_specs):
-                all_items.append(doc)
-        
+    collection = None
+    if request.name == "MacBookPro":
+        collection = db["mac_book_pro"]
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Model collection not found")
+
+    all_items = []
+    mongo_sort_specs = _compose_sort_specs(request.sortSpecs)
+    if not request.filter:
+        for doc in collection.find().sort(mongo_sort_specs):
+            all_items.append(doc)
+    else:
+        query = _compose_query(request.filter) or {}
+        for doc in collection.find(query).sort(mongo_sort_specs):
+            all_items.append(doc)
+
+    skip = max(request.skip, 0)
+    limit = min(max(request.limit, 1), 100)
+    paginated_items = all_items[skip:skip+limit]
+    items = [_document_to_ebay_item(item) for item in paginated_items]
+
+    # Only compute stats and available filters for page 1 (skip == 0)
+    if skip == 0:
         available_filters = _available_filter_values(all_items)
-        skip = max(request.skip, 0)
-        limit = min(max(request.limit, 1), 100)
-        paginated_items = all_items[skip:skip+limit]
-        items = [_document_to_ebay_item(item) for item in paginated_items]
-        
         prices = [item["derived"]["price"] for item in all_items if item["derived"] and item["derived"]["price"] is not None]
         stats = Stats(
             min=min(prices) if prices else None,
@@ -327,36 +372,33 @@ def ebay_items(request: EbayItemsRequest):
             mean=(sum(prices) / len(prices)) if prices else None,
             count=len(prices) if prices else None,
         )
-        
-        return EbayItemsResponse(
-            items=items,
-            stats=stats,
-            availableFilters=available_filters or None,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    else:
+        available_filters = None
+        stats = None
+
+    return EbayItemsResponse(
+        items=items,
+        stats=stats,
+        availableFilters=available_filters or None,
+    )
 
 @app.post("/ebay/filter_values", response_model=EbayFilterValuesResponse)
 def ebay_filter_values(request: EbayFilterValuesRequest):
-    try:
-        collection = None
-        if request.name == "MacBookPro":
-            collection = db["mac_book_pro"]
-        if collection is None:
-            raise HTTPException(status_code=404, detail="Model collection not found")
-       
-        all_items = []
-        
-        for doc in collection.find():
-            all_items.append(doc)
-        
-        available_filters = _available_filter_values(all_items)
-        
-        return EbayFilterValuesResponse(
-            availableFilters=available_filters or None,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    collection = None
+    if request.name == "MacBookPro":
+        collection = db["mac_book_pro"]
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Model collection not found")
+
+    all_items = []
+    for doc in collection.find():
+        all_items.append(doc)
+
+    available_filters = _available_filter_values(all_items)
+
+    return EbayFilterValuesResponse(
+        availableFilters=available_filters or None,
+    )
 
 
 

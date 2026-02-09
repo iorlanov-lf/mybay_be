@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from models import (
     DerivedData, LlmDerived, EbayItem, EbayItemsRequest,
     EbayItemsResponse, EbayFilterValuesResponse, VariantSpec,
-    ItemDetails, Stats,
+    ItemDetails, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse,
 )
 from main import _compose_query, _compose_sort_specs, _available_filter_values
 
@@ -267,3 +267,58 @@ def test_llm_derived_excludes_rank_fields():
     assert "battery" in dumped
     assert "screenRank" not in dumped
     assert "batteryRank" not in dumped
+
+
+# ── Story 1.3: API envelope format tests ──
+
+def test_ebay_items_response_stats_optional():
+    """EbayItemsResponse should accept stats=None (page 2+ responses)."""
+    resp = EbayItemsResponse(items=[], stats=None, availableFilters=None)
+    data = resp.model_dump()
+    assert data["stats"] is None
+    assert data["availableFilters"] is None
+
+
+def test_ebay_items_response_stats_present():
+    """EbayItemsResponse should include stats when provided (page 1)."""
+    resp = EbayItemsResponse(
+        items=[],
+        stats=Stats(min=100, max=500, median=300, mean=290, count=10),
+        availableFilters={"releaseYear": [{"value": "2017", "count": 5}]},
+    )
+    data = resp.model_dump()
+    assert data["stats"] is not None
+    assert data["stats"]["count"] == 10
+    assert data["availableFilters"] is not None
+
+
+def test_error_response_validation_format():
+    """ErrorResponse should serialize to { error: { code, message, details } }."""
+    resp = ErrorResponse(
+        error=ErrorEnvelope(
+            code="VALIDATION_ERROR",
+            message="Request validation failed",
+            details=[
+                ErrorDetail(loc=["body", "name"], msg="Field required", type="missing"),
+            ],
+        )
+    )
+    data = resp.model_dump()
+    assert "error" in data
+    assert data["error"]["code"] == "VALIDATION_ERROR"
+    assert data["error"]["message"] == "Request validation failed"
+    assert len(data["error"]["details"]) == 1
+    assert data["error"]["details"][0]["msg"] == "Field required"
+
+
+def test_error_response_http_format():
+    """ErrorResponse for HTTP errors should have code and message, no details."""
+    resp = ErrorResponse(
+        error=ErrorEnvelope(
+            code="HTTP_404",
+            message="Model collection not found",
+        )
+    )
+    data = resp.model_dump()
+    assert data["error"]["code"] == "HTTP_404"
+    assert data["error"]["details"] is None

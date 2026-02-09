@@ -169,7 +169,7 @@ class Stats(BaseModel):
     
 class EbayItemsResponse(BaseModel):
     items: List[EbayItem]
-    stats: Stats
+    stats: Optional[Stats] = None
     availableFilters: Optional[Dict[str, List[FilterValue]]] = None
 
 class EbayFilterValuesRequest(BaseModel):
@@ -177,3 +177,19 @@ class EbayFilterValuesRequest(BaseModel):
     
 class EbayFilterValuesResponse(BaseModel):
     availableFilters: Optional[Dict[str, List[FilterValue]]] = None
+
+
+class ErrorDetail(BaseModel):
+    loc: Optional[List[Any]] = None
+    msg: str
+    type: str
+
+
+class ErrorEnvelope(BaseModel):
+    code: str
+    message: str
+    details: Optional[List[ErrorDetail]] = None
+
+
+class ErrorResponse(BaseModel):
+    error: ErrorEnvelope
