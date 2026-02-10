@@ -161,10 +161,10 @@ class FilterValue(BaseModel):
     count: int
 
 class Stats(BaseModel):
-    min: Optional[Decimal] = None
-    max: Optional[Decimal] = None
-    median: Optional[Decimal] = None
-    mean: Optional[Decimal] = None
+    min: Optional[float] = None
+    max: Optional[float] = None
+    median: Optional[float] = None
+    mean: Optional[float] = None
     count: Optional[int] = None
     
 class EbayItemsResponse(BaseModel):

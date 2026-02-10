@@ -322,3 +322,37 @@ def test_error_response_http_format():
     data = resp.model_dump()
     assert data["error"]["code"] == "HTTP_404"
     assert data["error"]["details"] is None
+
+
+# ── Story 1.5: Price range filter tests ──
+
+def test_compose_query_price_range_both():
+    """_compose_query with minPrice and maxPrice produces $gte/$lte range."""
+    query = _compose_query({"minPrice": 500, "maxPrice": 1000})
+    assert query is not None
+    price_cond = query["$and"][0]
+    assert price_cond == {"derived.price": {"$gte": 500, "$lte": 1000}}
+
+
+def test_compose_query_price_range_min_only():
+    """_compose_query with minPrice only produces $gte without $lte."""
+    query = _compose_query({"minPrice": 500})
+    assert query is not None
+    price_cond = query["$and"][0]
+    assert price_cond == {"derived.price": {"$gte": 500}}
+    assert "$lte" not in price_cond["derived.price"]
+
+
+def test_compose_query_price_range_max_only():
+    """_compose_query with maxPrice only produces $lte without $gte."""
+    query = _compose_query({"maxPrice": 1000})
+    assert query is not None
+    price_cond = query["$and"][0]
+    assert price_cond == {"derived.price": {"$lte": 1000}}
+    assert "$gte" not in price_cond["derived.price"]
+
+
+def test_compose_query_price_range_none():
+    """_compose_query with both None produces no price condition."""
+    query = _compose_query({"minPrice": None, "maxPrice": None})
+    assert query is None

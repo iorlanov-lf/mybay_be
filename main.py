@@ -177,7 +177,18 @@ def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
     value = filter_data.get("condition")
     if value is not None and value != []:
         query["$and"].append({"details.condition": {"$in": value}})
-    
+
+    # price range filter
+    min_price = filter_data.get("minPrice")
+    max_price = filter_data.get("maxPrice")
+    if min_price is not None or max_price is not None:
+        price_condition: Dict[str, Any] = {}
+        if min_price is not None:
+            price_condition["$gte"] = min_price
+        if max_price is not None:
+            price_condition["$lte"] = max_price
+        query["$and"].append({"derived.price": price_condition})
+
     return query if query["$and"] else None
 
 def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
@@ -363,7 +374,7 @@ def ebay_items(request: EbayItemsRequest):
     # Only compute stats and available filters for page 1 (skip == 0)
     if skip == 0:
         available_filters = _available_filter_values(all_items)
-        prices = [item["derived"]["price"] for item in all_items if item["derived"] and item["derived"]["price"] is not None]
+        prices = [float(item["derived"]["price"]) for item in all_items if item["derived"] and item["derived"]["price"] is not None]
         stats = Stats(
             min=min(prices) if prices else None,
             max=max(prices) if prices else None,
