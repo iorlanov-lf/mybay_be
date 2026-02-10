@@ -73,10 +73,10 @@ db = client["mybaydb"]
 DERIVED_FILTER_FIELDS = [
     "releaseYear", "laptopModel", "modelNumber", "modelId", "partNumber",
     "cpuModel", "cpuFamily", "cpuSpeed", "ssdSize", "screenSize", "ramSize",
-    "color", "specsConflict",
+    "color", "specsConflict", "specsQuality",
 ]
-# Sort/available-filter adds price and specsQuality
-DERIVED_SORT_FIELDS = DERIVED_FILTER_FIELDS + ["price", "specsQuality"]
+# Sort/available-filter adds price and minDistance
+DERIVED_SORT_FIELDS = DERIVED_FILTER_FIELDS + ["price", "minDistance"]
 
 LLM_FIELDS = [
     "charger", "battery", "screen", "keyboard", "housing",

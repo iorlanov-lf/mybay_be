@@ -400,3 +400,25 @@ def test_compose_query_price_range_none():
     """_compose_query with both None produces no price condition."""
     query = _compose_query({"minPrice": None, "maxPrice": None})
     assert query is None
+
+
+# ── Story 2.1: Specs Quality and Match Distance tests ──
+
+def test_compose_query_specs_quality_filter():
+    """_compose_query with specsQuality produces correct derived path."""
+    query = _compose_query({"specsQuality": ["single match"]})
+    query_str = str(query)
+    assert "derived.specsQuality" in query_str
+    assert "single match" in query_str
+
+
+def test_compose_sort_specs_min_distance():
+    """Sorting by minDistance produces derived.minDistance path."""
+    specs = _compose_sort_specs([_ss("minDistance")])
+    assert specs == [("derived.minDistance", 1)]
+
+
+def test_compose_sort_specs_min_distance_descending():
+    """Sorting by minDistance descending produces correct direction."""
+    specs = _compose_sort_specs([_ss("minDistance", -1)])
+    assert specs == [("derived.minDistance", -1)]
