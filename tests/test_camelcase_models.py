@@ -8,8 +8,14 @@ from models import (
     DerivedData, LlmDerived, EbayItem, EbayItemsRequest,
     EbayItemsResponse, EbayFilterValuesResponse, VariantSpec,
     ItemDetails, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse,
+    SortSpecRequest,
 )
 from main import _compose_query, _compose_sort_specs, _available_filter_values
+
+
+def _ss(field: str, direction: int = 1) -> SortSpecRequest:
+    """Shorthand to build a SortSpecRequest for tests."""
+    return SortSpecRequest(field=field, direction=direction)
 
 
 # ── Model serialization tests ──
@@ -154,13 +160,13 @@ def test_compose_query_uses_llmDerived_path():
 
 def test_compose_sort_specs_derived_path():
     """_compose_sort_specs should produce derived.releaseYear paths."""
-    specs = _compose_sort_specs([{"field": "releaseYear", "direction": -1}])
+    specs = _compose_sort_specs([_ss("releaseYear", -1)])
     assert specs == [("derived.releaseYear", -1)]
 
 
 def test_compose_sort_specs_llm_path():
     """_compose_sort_specs should produce rank paths for categorical LLM fields."""
-    specs = _compose_sort_specs([{"field": "componentListing", "direction": 1}])
+    specs = _compose_sort_specs([_ss("componentListing")])
     assert specs == [("llmDerived.componentListingRank", 1)]
 
 
@@ -193,31 +199,31 @@ def test_available_filter_values_uses_camelcase_keys():
 
 def test_compose_sort_specs_condition_uses_rank():
     """Sorting by condition should use derived.conditionRank."""
-    specs = _compose_sort_specs([{"field": "condition", "direction": 1}])
+    specs = _compose_sort_specs([_ss("condition")])
     assert specs == [("derived.conditionRank", 1)]
 
 
 def test_compose_sort_specs_battery_uses_rank():
     """Sorting by battery should use llmDerived.batteryRank."""
-    specs = _compose_sort_specs([{"field": "battery", "direction": -1}])
+    specs = _compose_sort_specs([_ss("battery", -1)])
     assert specs == [("llmDerived.batteryRank", -1)]
 
 
 def test_compose_sort_specs_screen_uses_rank():
     """Sorting by screen should use llmDerived.screenRank."""
-    specs = _compose_sort_specs([{"field": "screen", "direction": 1}])
+    specs = _compose_sort_specs([_ss("screen")])
     assert specs == [("llmDerived.screenRank", 1)]
 
 
 def test_compose_sort_specs_specs_quality_uses_rank():
     """Sorting by specsQuality should use derived.specsQualityRank."""
-    specs = _compose_sort_specs([{"field": "specsQuality", "direction": 1}])
+    specs = _compose_sort_specs([_ss("specsQuality")])
     assert specs == [("derived.specsQualityRank", 1)]
 
 
 def test_compose_sort_specs_numeric_field_no_rank():
     """Numeric fields like price should NOT use rank paths."""
-    specs = _compose_sort_specs([{"field": "price", "direction": 1}])
+    specs = _compose_sort_specs([_ss("price")])
     assert specs == [("derived.price", 1)]
 
 
@@ -235,8 +241,46 @@ def test_compose_sort_specs_all_llm_rank_fields():
         "componentListing": "llmDerived.componentListingRank",
     }
     for field, expected_path in llm_rank_fields.items():
-        specs = _compose_sort_specs([{"field": field, "direction": 1}])
+        specs = _compose_sort_specs([_ss(field)])
         assert specs == [(expected_path, 1)], f"Field '{field}' should sort on '{expected_path}'"
+
+
+# ── Sort functionality tests (Story 1.6) ──
+
+def test_compose_sort_specs_default_none():
+    """None sort_specs should default to price ascending."""
+    specs = _compose_sort_specs(None)
+    assert specs == [("derived.price", 1)]
+
+
+def test_compose_sort_specs_default_empty_list():
+    """Empty sort_specs list should default to price ascending."""
+    specs = _compose_sort_specs([])
+    assert specs == [("derived.price", 1)]
+
+
+def test_compose_sort_specs_multiple_specs():
+    """Multiple sort specs should produce a multi-field MongoDB sort list."""
+    specs = _compose_sort_specs([_ss("price"), _ss("condition", -1)])
+    assert specs == [("derived.price", 1), ("derived.conditionRank", -1)]
+
+
+def test_compose_sort_specs_details_returnable():
+    """Sorting by returnable should map to details.returnTerms.returnsAccepted."""
+    specs = _compose_sort_specs([_ss("returnable")])
+    assert specs == [("details.returnTerms.returnsAccepted", 1)]
+
+
+def test_compose_sort_specs_unknown_field_fallback():
+    """Unknown field should be ignored; if no valid fields, fall back to default."""
+    specs = _compose_sort_specs([_ss("nonexistent")])
+    assert specs == [("derived.price", 1)]
+
+
+def test_compose_sort_specs_price_descending():
+    """Price descending should produce derived.price with direction -1."""
+    specs = _compose_sort_specs([_ss("price", -1)])
+    assert specs == [("derived.price", -1)]
 
 
 def test_derived_data_excludes_rank_fields():

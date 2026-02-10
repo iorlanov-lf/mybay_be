@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional, Any, Union, Dict
+from typing import List, Literal, Optional, Any, Union, Dict
 
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -149,12 +149,19 @@ class EbayItem(BaseModel):
     derived: Optional[DerivedData] = None
     llmDerived: Optional[LlmDerived] = None
 
+class SortSpecRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field: str
+    direction: Literal[1, -1] = 1
+
+
 class EbayItemsRequest(BaseModel):
     name: str
     skip: int = 0
     limit: int = 10
     filter: Optional[dict[str, Any]] = None
-    sortSpecs: Optional[List[dict[str, Any]]] = None
+    sortSpecs: Optional[List[SortSpecRequest]] = None
     
 class FilterValue(BaseModel):
     value: Any

@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from models import EbayFilterValuesRequest, EbayFilterValuesResponse, EbayItem, EbayItemsRequest, EbayItemsResponse, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse
+from models import EbayFilterValuesRequest, EbayFilterValuesResponse, EbayItem, EbayItemsRequest, EbayItemsResponse, SortSpecRequest, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse
 from pymongo import MongoClient
 
 app = FastAPI()
@@ -67,6 +67,37 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # MongoDB connection setup
 client = MongoClient("mongodb://localhost:27017/")
 db = client["mybaydb"]
+
+# ── Shared field lists ──
+# Base derived fields used for filtering
+DERIVED_FILTER_FIELDS = [
+    "releaseYear", "laptopModel", "modelNumber", "modelId", "partNumber",
+    "cpuModel", "cpuFamily", "cpuSpeed", "ssdSize", "screenSize", "ramSize",
+    "color", "specsConflict",
+]
+# Sort/available-filter adds price and specsQuality
+DERIVED_SORT_FIELDS = DERIVED_FILTER_FIELDS + ["price", "specsQuality"]
+
+LLM_FIELDS = [
+    "charger", "battery", "screen", "keyboard", "housing",
+    "audio", "ports", "functionality", "componentListing",
+]
+
+DETAILS_FIELDS = ["returnable", "condition"]
+
+RANK_SORT_MAP = {
+    "screen": "llmDerived.screenRank",
+    "keyboard": "llmDerived.keyboardRank",
+    "housing": "llmDerived.housingRank",
+    "audio": "llmDerived.audioRank",
+    "ports": "llmDerived.portsRank",
+    "battery": "llmDerived.batteryRank",
+    "functionality": "llmDerived.functionalityRank",
+    "charger": "llmDerived.chargerRank",
+    "componentListing": "llmDerived.componentListingRank",
+    "condition": "derived.conditionRank",
+    "specsQuality": "derived.specsQualityRank",
+}
 
 
 @app.get("/")
@@ -134,37 +165,13 @@ def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
         )
 
     # derived and variant fields
-    for derived_field in [
-        "releaseYear",
-        "laptopModel",
-        "modelNumber",
-        "modelId",
-        "partNumber",
-        "cpuModel",
-        "cpuFamily",
-        "cpuSpeed",
-        "ssdSize",
-        "screenSize",
-        "ramSize",
-        "color",
-        "specsConflict"
-    ]:
+    for derived_field in DERIVED_FILTER_FIELDS:
         value = filter_data.get(derived_field)
         if value is not None and value != []:
             _append_derived_or_variant_filter(derived_field, value)
 
     # llmDerived fields
-    for llm_field in [
-        "charger",
-        "battery",
-        "screen",
-        "keyboard",
-        "housing",
-        "audio",
-        "ports",
-        "functionality",
-        "componentListing"
-    ]:
+    for llm_field in LLM_FIELDS:
         value = filter_data.get(llm_field)
         if value is not None and value != []:
             query["$and"].append({f"llmDerived.{llm_field}": {"$in": value if isinstance(value, list) else [value]}})
@@ -181,6 +188,10 @@ def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
     # price range filter
     min_price = filter_data.get("minPrice")
     max_price = filter_data.get("maxPrice")
+    if min_price is not None and not isinstance(min_price, (int, float)):
+        min_price = None
+    if max_price is not None and not isinstance(max_price, (int, float)):
+        max_price = None
     if min_price is not None or max_price is not None:
         price_condition: Dict[str, Any] = {}
         if min_price is not None:
@@ -192,38 +203,7 @@ def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
     return query if query["$and"] else None
 
 def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
-    derived_fields = [
-        "releaseYear",
-        "laptopModel",
-        "modelNumber",
-        "modelId",
-        "partNumber",
-        "cpuModel",
-        "cpuFamily",
-        "cpuSpeed",
-        "ssdSize",
-        "screenSize",
-        "ramSize",
-        "color",
-        "specsConflict",
-        "specsQuality"
-    ]
-    llm_fields = [
-        "charger",
-        "battery",
-        "screen",
-        "keyboard",
-        "housing",
-        "audio",
-        "ports",
-        "functionality",
-        "componentListing"
-    ]
-    details_fields = [
-        "returnable",
-        "condition"
-    ]
-    target_fields = derived_fields + llm_fields + details_fields
+    target_fields = DERIVED_SORT_FIELDS + LLM_FIELDS + DETAILS_FIELDS
     value_counts: Dict[str, Dict[Any, int]] = {field: {} for field in target_fields}
 
     for doc in docs:
@@ -246,9 +226,9 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
         derived = doc.get("derived") or {}
         llmDerived = doc.get("llmDerived") or {}
         details = doc.get("details") or {}
-        for field in derived_fields:
+        for field in DERIVED_SORT_FIELDS:
             _collect(field, derived.get(field))
-        for field in llm_fields:
+        for field in LLM_FIELDS:
             _collect(field, llmDerived.get(field))
         _collect("returnable", details.get("returnTerms", {}).get("returnsAccepted"))
         _collect("condition", details.get("condition"))
@@ -258,7 +238,7 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
                 continue
             variant_data = variant_entry.get("variant")
             if isinstance(variant_data, dict):
-                for field in derived_fields:
+                for field in DERIVED_SORT_FIELDS:
                     if not derived.get(field):
                         _collect(field, variant_data.get(field))
 
@@ -275,70 +255,21 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
         if counts
     }
 
-def _compose_sort_specs(sort_specs: Optional[List[Dict[str, Any]]]) -> List[tuple[str, int]]:
-
-    # Categorical fields that sort on rank instead of string value
-    RANK_SORT_MAP = {
-        "screen": "llmDerived.screenRank",
-        "keyboard": "llmDerived.keyboardRank",
-        "housing": "llmDerived.housingRank",
-        "audio": "llmDerived.audioRank",
-        "ports": "llmDerived.portsRank",
-        "battery": "llmDerived.batteryRank",
-        "functionality": "llmDerived.functionalityRank",
-        "charger": "llmDerived.chargerRank",
-        "componentListing": "llmDerived.componentListingRank",
-        "condition": "derived.conditionRank",
-        "specsQuality": "derived.specsQualityRank",
-    }
-
-    derived_fields = [
-        "price",
-        "releaseYear",
-        "laptopModel",
-        "modelNumber",
-        "modelId",
-        "partNumber",
-        "cpuModel",
-        "cpuFamily",
-        "cpuSpeed",
-        "ssdSize",
-        "screenSize",
-        "ramSize",
-        "color",
-        "specsConflict",
-        "specsQuality"
-    ]
-    llm_fields = [
-        "charger",
-        "battery",
-        "screen",
-        "keyboard",
-        "housing",
-        "audio",
-        "ports",
-        "functionality",
-        "componentListing"
-    ]
-    details_fields = [
-        "returnable",
-        "condition"
-    ]
-
+def _compose_sort_specs(sort_specs: Optional[List[SortSpecRequest]]) -> List[tuple[str, int]]:
     default = [("derived.price", 1)]
     if not sort_specs:
         return default
     mongo_sort_specs = []
     for spec in sort_specs:
-        field = spec.get("field")
-        direction = spec.get("direction", 1)
+        field = spec.field
+        direction = spec.direction
         if field in RANK_SORT_MAP:
             mongo_sort_specs.append((RANK_SORT_MAP[field], direction))
-        elif field in derived_fields:
+        elif field in DERIVED_SORT_FIELDS:
             mongo_sort_specs.append((f"derived.{field}", direction))
-        elif field in llm_fields:
+        elif field in LLM_FIELDS:
             mongo_sort_specs.append((f"llmDerived.{field}", direction))
-        elif field in details_fields:
+        elif field in DETAILS_FIELDS:
             if field == "returnable":
                 mongo_sort_specs.append(("details.returnTerms.returnsAccepted", direction))
             else:

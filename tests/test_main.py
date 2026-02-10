@@ -43,15 +43,14 @@ def test_http_exception_returns_structured_envelope(client):
     assert "not found" in data["error"]["message"].lower()
 
 
-def test_unhandled_error_returns_structured_envelope():
-    """Unhandled exceptions (e.g. invalid sort direction) return structured error envelope."""
+def test_invalid_sort_direction_returns_validation_error():
+    """Invalid sort direction (not 1 or -1) returns structured validation error."""
     with TestClient(app, raise_server_exceptions=False) as c:
         response = c.post("/ebay/items", json={
             "name": "MacBookPro",
             "sortSpecs": [{"field": "price", "direction": 10}],
         })
-        assert response.status_code == 500
+        assert response.status_code == 422
         data = response.json()
         assert "error" in data
-        assert data["error"]["code"] == "INTERNAL_ERROR"
-        assert isinstance(data["error"]["message"], str)
+        assert data["error"]["code"] == "VALIDATION_ERROR"
