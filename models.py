@@ -167,12 +167,18 @@ class FilterValue(BaseModel):
     value: Any
     count: int
 
+class PriceBucket(BaseModel):
+    rangeMin: float
+    rangeMax: float
+    count: int
+
 class Stats(BaseModel):
     min: Optional[float] = None
     max: Optional[float] = None
     median: Optional[float] = None
     mean: Optional[float] = None
     count: Optional[int] = None
+    priceBuckets: Optional[List[PriceBucket]] = None
     
 class EbayItemsResponse(BaseModel):
     items: List[EbayItem]

@@ -7,10 +7,10 @@ from datetime import datetime, timezone
 from models import (
     DerivedData, LlmDerived, EbayItem, EbayItemsRequest,
     EbayItemsResponse, EbayFilterValuesResponse, VariantSpec,
-    ItemDetails, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse,
+    ItemDetails, PriceBucket, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse,
     SortSpecRequest,
 )
-from main import _compose_query, _compose_sort_specs, _available_filter_values
+from main import _compose_query, _compose_sort_specs, _available_filter_values, _compute_price_buckets
 
 
 def _ss(field: str, direction: int = 1) -> SortSpecRequest:
@@ -422,3 +422,39 @@ def test_compose_sort_specs_min_distance_descending():
     """Sorting by minDistance descending produces correct direction."""
     specs = _compose_sort_specs([_ss("minDistance", -1)])
     assert specs == [("derived.minDistance", -1)]
+
+
+# ── Story 2.3: Price Distribution Histogram ──
+
+def test_compute_price_buckets_returns_none_for_fewer_than_3():
+    """Price buckets returns None when fewer than 3 prices."""
+    assert _compute_price_buckets([]) is None
+    assert _compute_price_buckets([100.0]) is None
+    assert _compute_price_buckets([100.0, 200.0]) is None
+
+def test_compute_price_buckets_returns_buckets():
+    """Price buckets returns correct number of buckets."""
+    prices = [100.0, 200.0, 300.0, 400.0, 500.0]
+    buckets = _compute_price_buckets(prices, num_buckets=4)
+    assert buckets is not None
+    assert len(buckets) == 4
+    assert buckets[0].rangeMin == 100.0
+    assert buckets[-1].rangeMax == 500.0
+    total = sum(b.count for b in buckets)
+    assert total == 5
+
+def test_compute_price_buckets_all_same_price():
+    """Price buckets handles all identical prices."""
+    prices = [250.0, 250.0, 250.0]
+    buckets = _compute_price_buckets(prices)
+    assert buckets is not None
+    assert len(buckets) == 1
+    assert buckets[0].count == 3
+
+def test_compute_price_buckets_in_stats_response():
+    """Stats model includes priceBuckets field."""
+    buckets = [PriceBucket(rangeMin=0, rangeMax=100, count=5)]
+    stats = Stats(min=0, max=100, mean=50, median=50, count=5, priceBuckets=buckets)
+    assert stats.priceBuckets is not None
+    assert len(stats.priceBuckets) == 1
+    assert stats.priceBuckets[0].count == 5

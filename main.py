@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from models import EbayFilterValuesRequest, EbayFilterValuesResponse, EbayItem, EbayItemsRequest, EbayItemsResponse, SortSpecRequest, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse
+from models import EbayFilterValuesRequest, EbayFilterValuesResponse, EbayItem, EbayItemsRequest, EbayItemsResponse, PriceBucket, SortSpecRequest, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse
 from pymongo import MongoClient
 
 app = FastAPI()
@@ -202,6 +202,22 @@ def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
 
     return query if query["$and"] else None
 
+def _compute_price_buckets(prices: List[float], num_buckets: int = 12) -> Optional[List[PriceBucket]]:
+    if len(prices) < 3:
+        return None
+    price_min = min(prices)
+    price_max = max(prices)
+    if price_max == price_min:
+        return [PriceBucket(rangeMin=price_min, rangeMax=price_max, count=len(prices))]
+    bucket_width = (price_max - price_min) / num_buckets
+    buckets = []
+    for i in range(num_buckets):
+        range_min = price_min + i * bucket_width
+        range_max = price_min + (i + 1) * bucket_width
+        count = sum(1 for p in prices if (range_min <= p < range_max) or (i == num_buckets - 1 and p == range_max))
+        buckets.append(PriceBucket(rangeMin=round(range_min, 2), rangeMax=round(range_max, 2), count=count))
+    return buckets
+
 def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
     target_fields = DERIVED_SORT_FIELDS + LLM_FIELDS + DETAILS_FIELDS
     value_counts: Dict[str, Dict[Any, int]] = {field: {} for field in target_fields}
@@ -313,6 +329,7 @@ def ebay_items(request: EbayItemsRequest):
                     (sorted(prices)[len(prices)//2 - 1] + sorted(prices)[len(prices)//2]) / 2) if prices else None,
             mean=(sum(prices) / len(prices)) if prices else None,
             count=len(prices) if prices else None,
+            priceBuckets=_compute_price_buckets(prices) if prices else None,
         )
     else:
         available_filters = None
