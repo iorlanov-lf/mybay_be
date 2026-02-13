@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from models import EbayFilterValuesRequest, EbayFilterValuesResponse, EbayItem, EbayItemsRequest, EbayItemsResponse, PriceBucket, SortSpecRequest, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse
+from models import EbayItem, EbayItemsRequest, EbayItemsResponse, Pagination, PriceBucket, SortSpecRequest, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse
 from pymongo import MongoClient
 
 app = FastAPI()
@@ -132,7 +132,7 @@ def _document_to_ebay_item(doc: dict[str, Any]) -> EbayItem:
         raise HTTPException(status_code=400, detail=str(e))
     return ebay_item
 
-def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = False) -> Optional[Dict[str, Any]]:
     if not filter_data:
         return None
     query: Dict[str, Any] = {"$and": []}
@@ -185,22 +185,38 @@ def _compose_query(filter_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, 
     if value is not None and value != []:
         query["$and"].append({"details.condition": {"$in": value}})
 
-    # price range filter
-    min_price = filter_data.get("minPrice")
-    max_price = filter_data.get("maxPrice")
-    if min_price is not None and not isinstance(min_price, (int, float)):
-        min_price = None
-    if max_price is not None and not isinstance(max_price, (int, float)):
-        max_price = None
-    if min_price is not None or max_price is not None:
-        price_condition: Dict[str, Any] = {}
-        if min_price is not None:
-            price_condition["$gte"] = min_price
-        if max_price is not None:
-            price_condition["$lte"] = max_price
-        query["$and"].append({"derived.price": price_condition})
+    # price range filter (skip when building non-price query for priceBuckets)
+    if not exclude_price:
+        min_price = filter_data.get("minPrice")
+        max_price = filter_data.get("maxPrice")
+        if min_price is not None and not isinstance(min_price, (int, float)):
+            min_price = None
+        if max_price is not None and not isinstance(max_price, (int, float)):
+            max_price = None
+        if min_price is not None or max_price is not None:
+            price_condition: Dict[str, Any] = {}
+            if min_price is not None:
+                price_condition["$gte"] = min_price
+            if max_price is not None:
+                price_condition["$lte"] = max_price
+            query["$and"].append({"derived.price": price_condition})
 
     return query if query["$and"] else None
+
+def _compute_stats(prices: List[float], price_buckets: Optional[List[PriceBucket]] = None) -> Optional[Stats]:
+    if not prices:
+        return None
+    sorted_prices = sorted(prices)
+    n = len(sorted_prices)
+    median = sorted_prices[n // 2] if n % 2 == 1 else (sorted_prices[n // 2 - 1] + sorted_prices[n // 2]) / 2
+    return Stats(
+        min=sorted_prices[0],
+        max=sorted_prices[-1],
+        median=median,
+        mean=sum(sorted_prices) / n,
+        count=n,
+        priceBuckets=price_buckets,
+    )
 
 def _compute_price_buckets(prices: List[float], num_buckets: int = 12) -> Optional[List[PriceBucket]]:
     if len(prices) < 3:
@@ -295,6 +311,12 @@ def _compose_sort_specs(sort_specs: Optional[List[SortSpecRequest]]) -> List[tup
     else:
         return default
 
+# Hard price cap per product for histogram bucket computation
+PRICE_CAP = {
+    "MacBookPro": 3000,
+}
+
+
 @app.post("/ebay/items", response_model=EbayItemsResponse)
 def ebay_items(request: EbayItemsRequest):
     collection = None
@@ -303,34 +325,40 @@ def ebay_items(request: EbayItemsRequest):
     if collection is None:
         raise HTTPException(status_code=404, detail="Model collection not found")
 
-    all_items = []
     mongo_sort_specs = _compose_sort_specs(request.sortSpecs)
-    if not request.filter:
-        for doc in collection.find().sort(mongo_sort_specs):
-            all_items.append(doc)
-    else:
-        query = _compose_query(request.filter) or {}
-        for doc in collection.find(query).sort(mongo_sort_specs):
-            all_items.append(doc)
+
+    # Build query with all filters (including price) for items/stats/availableFilters
+    query = _compose_query(request.filter) if request.filter else None
+    all_items = list(collection.find(query or {}).sort(mongo_sort_specs))
 
     skip = max(request.skip, 0)
     limit = min(max(request.limit, 1), 100)
     paginated_items = all_items[skip:skip+limit]
     items = [_document_to_ebay_item(item) for item in paginated_items]
 
-    # Only compute stats and available filters for page 1 (skip == 0)
+    # Only compute stats, availableFilters, and priceBuckets for page 1 (skip == 0)
     if skip == 0:
         available_filters = _available_filter_values(all_items)
-        prices = [float(item["derived"]["price"]) for item in all_items if item["derived"] and item["derived"]["price"] is not None]
-        stats = Stats(
-            min=min(prices) if prices else None,
-            max=max(prices) if prices else None,
-            median=(sorted(prices)[len(prices)//2] if len(prices) % 2 == 1 else
-                    (sorted(prices)[len(prices)//2 - 1] + sorted(prices)[len(prices)//2]) / 2) if prices else None,
-            mean=(sum(prices) / len(prices)) if prices else None,
-            count=len(prices) if prices else None,
-            priceBuckets=_compute_price_buckets(prices) if prices else None,
-        )
+        prices = [float(item["derived"]["price"]) for item in all_items if item.get("derived") and item["derived"].get("price") is not None]
+
+        # Dual filter pass: priceBuckets from non-price-filtered items
+        has_price_filter = request.filter and (request.filter.get("minPrice") is not None or request.filter.get("maxPrice") is not None)
+        if has_price_filter:
+            non_price_query = _compose_query(request.filter, exclude_price=True)
+            non_price_items = list(collection.find(non_price_query or {}))
+        else:
+            non_price_items = all_items
+
+        price_cap = PRICE_CAP.get(request.name)
+        non_price_prices = [
+            float(item["derived"]["price"])
+            for item in non_price_items
+            if item.get("derived") and item["derived"].get("price") is not None
+            and (price_cap is None or float(item["derived"]["price"]) <= price_cap)
+        ]
+
+        price_buckets = _compute_price_buckets(non_price_prices) if non_price_prices else None
+        stats = _compute_stats(prices, price_buckets)
     else:
         available_filters = None
         stats = None
@@ -339,24 +367,7 @@ def ebay_items(request: EbayItemsRequest):
         items=items,
         stats=stats,
         availableFilters=available_filters or None,
-    )
-
-@app.post("/ebay/filter_values", response_model=EbayFilterValuesResponse)
-def ebay_filter_values(request: EbayFilterValuesRequest):
-    collection = None
-    if request.name == "MacBookPro":
-        collection = db["mac_book_pro"]
-    if collection is None:
-        raise HTTPException(status_code=404, detail="Model collection not found")
-
-    all_items = []
-    for doc in collection.find():
-        all_items.append(doc)
-
-    available_filters = _available_filter_values(all_items)
-
-    return EbayFilterValuesResponse(
-        availableFilters=available_filters or None,
+        pagination=Pagination(skip=skip, limit=limit, total=len(all_items)),
     )
 
 

@@ -179,18 +179,19 @@ class Stats(BaseModel):
     mean: Optional[float] = None
     count: Optional[int] = None
     priceBuckets: Optional[List[PriceBucket]] = None
-    
+
+
+class Pagination(BaseModel):
+    skip: int
+    limit: int
+    total: int
+
+
 class EbayItemsResponse(BaseModel):
     items: List[EbayItem]
     stats: Optional[Stats] = None
     availableFilters: Optional[Dict[str, List[FilterValue]]] = None
-
-class EbayFilterValuesRequest(BaseModel):
-    name: str
-    
-class EbayFilterValuesResponse(BaseModel):
-    availableFilters: Optional[Dict[str, List[FilterValue]]] = None
-
+    pagination: Pagination
 
 class ErrorDetail(BaseModel):
     loc: Optional[List[Any]] = None

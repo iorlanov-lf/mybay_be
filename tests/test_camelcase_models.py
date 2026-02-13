@@ -6,11 +6,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from datetime import datetime, timezone
 from models import (
     DerivedData, LlmDerived, EbayItem, EbayItemsRequest,
-    EbayItemsResponse, EbayFilterValuesResponse, VariantSpec,
+    EbayItemsResponse,
+    Pagination, VariantSpec,
     ItemDetails, PriceBucket, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse,
     SortSpecRequest,
 )
-from main import _compose_query, _compose_sort_specs, _available_filter_values, _compute_price_buckets
+from main import _compose_query, _compose_sort_specs, _available_filter_values, _compute_price_buckets, _compute_stats
 
 
 def _ss(field: str, direction: int = 1) -> SortSpecRequest:
@@ -104,18 +105,12 @@ def test_ebay_items_response_available_filters():
         items=[],
         stats=Stats(),
         availableFilters={"releaseYear": [{"value": "2017", "count": 5}]},
+        pagination=Pagination(skip=0, limit=10, total=5),
     )
     data = resp.model_dump()
     assert "availableFilters" in data
     assert "available_filters" not in data
 
-
-def test_ebay_filter_values_response_available_filters():
-    """EbayFilterValuesResponse should use availableFilters."""
-    resp = EbayFilterValuesResponse(availableFilters=None)
-    data = resp.model_dump()
-    assert "availableFilters" in data
-    assert "available_filters" not in data
 
 
 def test_variant_spec_camelcase():
@@ -317,10 +312,12 @@ def test_llm_derived_excludes_rank_fields():
 
 def test_ebay_items_response_stats_optional():
     """EbayItemsResponse should accept stats=None (page 2+ responses)."""
-    resp = EbayItemsResponse(items=[], stats=None, availableFilters=None)
+    resp = EbayItemsResponse(items=[], stats=None, availableFilters=None, pagination=Pagination(skip=10, limit=10, total=50))
     data = resp.model_dump()
     assert data["stats"] is None
     assert data["availableFilters"] is None
+    assert data["pagination"]["skip"] == 10
+    assert data["pagination"]["total"] == 50
 
 
 def test_ebay_items_response_stats_present():
@@ -329,11 +326,27 @@ def test_ebay_items_response_stats_present():
         items=[],
         stats=Stats(min=100, max=500, median=300, mean=290, count=10),
         availableFilters={"releaseYear": [{"value": "2017", "count": 5}]},
+        pagination=Pagination(skip=0, limit=10, total=10),
     )
     data = resp.model_dump()
     assert data["stats"] is not None
     assert data["stats"]["count"] == 10
     assert data["availableFilters"] is not None
+    assert data["pagination"]["skip"] == 0
+
+
+def test_pagination_model():
+    """Pagination model contains skip, limit, total."""
+    p = Pagination(skip=0, limit=10, total=100)
+    data = p.model_dump()
+    assert data == {"skip": 0, "limit": 10, "total": 100}
+
+
+def test_pagination_always_present_in_response():
+    """Pagination is required (not optional) in EbayItemsResponse."""
+    import pytest
+    with pytest.raises(Exception):
+        EbayItemsResponse(items=[], stats=None, availableFilters=None)
 
 
 def test_error_response_validation_format():
@@ -458,3 +471,94 @@ def test_compute_price_buckets_in_stats_response():
     assert stats.priceBuckets is not None
     assert len(stats.priceBuckets) == 1
     assert stats.priceBuckets[0].count == 5
+
+
+# ── Story 2.1: Dual filter pass and price cap tests ──
+
+def test_compose_query_exclude_price_omits_price_filter():
+    """_compose_query with exclude_price=True should not include price conditions."""
+    filter_data = {"ramSize": [16], "minPrice": 500, "maxPrice": 1000}
+    query_with_price = _compose_query(filter_data, exclude_price=False)
+    query_without_price = _compose_query(filter_data, exclude_price=True)
+
+    # With price: should have 2 conditions (ramSize + price)
+    assert len(query_with_price["$and"]) == 2
+    # Without price: should have 1 condition (ramSize only)
+    assert len(query_without_price["$and"]) == 1
+
+
+def test_compose_query_exclude_price_keeps_other_filters():
+    """_compose_query with exclude_price=True should keep all non-price filters."""
+    filter_data = {
+        "ramSize": [16],
+        "screenSize": [15.4],
+        "minPrice": 500,
+        "maxPrice": 1000,
+        "screen": ["G"],
+    }
+    query = _compose_query(filter_data, exclude_price=True)
+    # ramSize + screenSize + screen (llm) = 3 conditions, no price
+    assert len(query["$and"]) == 3
+
+
+def test_compose_query_exclude_price_no_price_in_filter():
+    """_compose_query with exclude_price=True when no price filter is same as without."""
+    filter_data = {"ramSize": [16]}
+    q1 = _compose_query(filter_data, exclude_price=False)
+    q2 = _compose_query(filter_data, exclude_price=True)
+    assert q1 == q2
+
+
+def test_compose_query_exclude_price_default_false():
+    """_compose_query default exclude_price is False (includes price)."""
+    filter_data = {"minPrice": 500}
+    query = _compose_query(filter_data)
+    assert len(query["$and"]) == 1
+    assert "derived.price" in str(query)
+
+
+def test_compute_price_buckets_respects_price_cap():
+    """Price buckets computed from prices capped at product limit."""
+    # Simulate: 5 normal prices + 1 bogus price above cap
+    prices_under_cap = [100.0, 200.0, 300.0, 400.0, 500.0]
+    prices_with_bogus = prices_under_cap + [9999.0]
+
+    buckets_capped = _compute_price_buckets(prices_under_cap)
+    buckets_uncapped = _compute_price_buckets(prices_with_bogus)
+
+    # Capped buckets should span 100-500, uncapped 100-9999
+    assert buckets_capped[-1].rangeMax == 500.0
+    assert buckets_uncapped[-1].rangeMax == 9999.0
+    # Verifies that filtering before calling _compute_price_buckets works
+    assert sum(b.count for b in buckets_capped) == 5
+
+
+def test_compute_stats_returns_correct_values():
+    """_compute_stats computes min, max, median, mean, count correctly."""
+    prices = [100.0, 200.0, 300.0, 400.0, 500.0]
+    stats = _compute_stats(prices)
+    assert stats.min == 100.0
+    assert stats.max == 500.0
+    assert stats.median == 300.0
+    assert stats.mean == 300.0
+    assert stats.count == 5
+    assert stats.priceBuckets is None
+
+
+def test_compute_stats_even_count_median():
+    """_compute_stats computes median correctly for even-length lists."""
+    prices = [100.0, 200.0, 300.0, 400.0]
+    stats = _compute_stats(prices)
+    assert stats.median == 250.0
+
+
+def test_compute_stats_empty_returns_none():
+    """_compute_stats returns None for empty price list."""
+    assert _compute_stats([]) is None
+
+
+def test_compute_stats_with_price_buckets():
+    """_compute_stats passes through priceBuckets."""
+    buckets = [PriceBucket(rangeMin=100, rangeMax=200, count=3)]
+    stats = _compute_stats([100.0, 150.0, 200.0], buckets)
+    assert stats.priceBuckets == buckets

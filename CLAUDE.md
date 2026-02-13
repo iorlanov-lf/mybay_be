@@ -42,8 +42,7 @@ This is a FastAPI backend serving eBay item data from MongoDB. It provides REST 
 |----------|--------|-------------|
 | `/` | GET | Health check |
 | `/about` | GET | About page |
-| `/ebay/items` | POST | Search/filter items with pagination and stats |
-| `/ebay/filter_values` | POST | Get available filter values for a model |
+| `/ebay/items` | POST | Search/filter items with pagination, stats, and available filter values |
 
 ### Data Models
 
