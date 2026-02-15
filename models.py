@@ -194,6 +194,15 @@ class EbayItemsResponse(BaseModel):
     availableFilters: Optional[Dict[str, List[FilterValue]]] = None
     pagination: Pagination
 
+class EbayItemsByIdsRequest(BaseModel):
+    name: str
+    itemIds: List[str]
+
+
+class EbayItemsByIdsResponse(BaseModel):
+    items: List[EbayItem]
+
+
 class ErrorDetail(BaseModel):
     loc: Optional[List[Any]] = None
     msg: str

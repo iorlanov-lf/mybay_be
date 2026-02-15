@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from models import EbayItem, EbayItemsRequest, EbayItemsResponse, Pagination, PriceBucket, SortSpecRequest, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse
+from models import EbayItem, EbayItemsByIdsRequest, EbayItemsByIdsResponse, EbayItemsRequest, EbayItemsResponse, Pagination, PriceBucket, SortSpecRequest, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse
 from pymongo import MongoClient
 
 app = FastAPI()
@@ -393,4 +393,17 @@ def ebay_items(request: EbayItemsRequest):
     )
 
 
+@app.post("/ebay/items/by-ids", response_model=EbayItemsByIdsResponse)
+def ebay_items_by_ids(request: EbayItemsByIdsRequest):
+    collection = None
+    if request.name == "MacBookPro":
+        collection = db["mac_book_pro"]
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Model collection not found")
 
+    if not request.itemIds:
+        return EbayItemsByIdsResponse(items=[])
+
+    docs = list(collection.find({"itemId": {"$in": request.itemIds}}))
+    items = [_document_to_ebay_item(doc) for doc in docs]
+    return EbayItemsByIdsResponse(items=items)
