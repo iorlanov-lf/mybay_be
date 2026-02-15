@@ -190,6 +190,7 @@ class Pagination(BaseModel):
 class EbayItemsResponse(BaseModel):
     items: List[EbayItem]
     stats: Optional[Stats] = None
+    baseStats: Optional[Stats] = None
     availableFilters: Optional[Dict[str, List[FilterValue]]] = None
     pagination: Pagination
 

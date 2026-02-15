@@ -218,20 +218,19 @@ def _compute_stats(prices: List[float], price_buckets: Optional[List[PriceBucket
         priceBuckets=price_buckets,
     )
 
-def _compute_price_buckets(prices: List[float], num_buckets: int = 12) -> Optional[List[PriceBucket]]:
+def _compute_price_buckets(prices: List[float]) -> Optional[List[PriceBucket]]:
     if len(prices) < 3:
         return None
-    price_min = min(prices)
+    import math
     price_max = max(prices)
-    if price_max == price_min:
-        return [PriceBucket(rangeMin=price_min, rangeMax=price_max, count=len(prices))]
-    bucket_width = (price_max - price_min) / num_buckets
+    # Fixed $100 buckets: $1-$100, $101-$200, etc.
+    num_buckets = math.ceil(price_max / 100)
     buckets = []
     for i in range(num_buckets):
-        range_min = price_min + i * bucket_width
-        range_max = price_min + (i + 1) * bucket_width
-        count = sum(1 for p in prices if (range_min <= p < range_max) or (i == num_buckets - 1 and p == range_max))
-        buckets.append(PriceBucket(rangeMin=round(range_min, 2), rangeMax=round(range_max, 2), count=count))
+        range_min = i * 100 + 1 if i > 0 else 1
+        range_max = (i + 1) * 100
+        count = sum(1 for p in prices if range_min <= p <= range_max)
+        buckets.append(PriceBucket(rangeMin=range_min, rangeMax=range_max, count=count))
     return buckets
 
 def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
@@ -311,7 +310,7 @@ def _compose_sort_specs(sort_specs: Optional[List[SortSpecRequest]]) -> List[tup
     else:
         return default
 
-# Hard price cap per product for histogram bucket computation
+# Hard price cap per product — items above this price are excluded from all results
 PRICE_CAP = {
     "MacBookPro": 3000,
 }
@@ -329,6 +328,16 @@ def ebay_items(request: EbayItemsRequest):
 
     # Build query with all filters (including price) for items/stats/availableFilters
     query = _compose_query(request.filter) if request.filter else None
+
+    # Apply per-product price cap globally
+    price_cap = PRICE_CAP.get(request.name)
+    if price_cap is not None:
+        cap_condition = {"derived.price": {"$lte": price_cap}}
+        if query and "$and" in query:
+            query["$and"].append(cap_condition)
+        else:
+            query = {"$and": [cap_condition]} if query is None else {"$and": [query, cap_condition]}
+
     all_items = list(collection.find(query or {}).sort(mongo_sort_specs))
 
     skip = max(request.skip, 0)
@@ -341,31 +350,44 @@ def ebay_items(request: EbayItemsRequest):
         available_filters = _available_filter_values(all_items)
         prices = [float(item["derived"]["price"]) for item in all_items if item.get("derived") and item["derived"].get("price") is not None]
 
-        # Dual filter pass: priceBuckets from non-price-filtered items
+        # Dual filter pass: priceBuckets and baseStats from non-price-filtered items
         has_price_filter = request.filter and (request.filter.get("minPrice") is not None or request.filter.get("maxPrice") is not None)
         if has_price_filter:
             non_price_query = _compose_query(request.filter, exclude_price=True)
+            # Apply price cap to non-price query too
+            if price_cap is not None:
+                cap_condition = {"derived.price": {"$lte": price_cap}}
+                if non_price_query and "$and" in non_price_query:
+                    non_price_query["$and"].append(cap_condition)
+                else:
+                    non_price_query = {"$and": [cap_condition]} if non_price_query is None else {"$and": [non_price_query, cap_condition]}
             non_price_items = list(collection.find(non_price_query or {}))
         else:
             non_price_items = all_items
 
-        price_cap = PRICE_CAP.get(request.name)
         non_price_prices = [
             float(item["derived"]["price"])
             for item in non_price_items
             if item.get("derived") and item["derived"].get("price") is not None
-            and (price_cap is None or float(item["derived"]["price"]) <= price_cap)
         ]
 
         price_buckets = _compute_price_buckets(non_price_prices) if non_price_prices else None
         stats = _compute_stats(prices, price_buckets)
+
+        # baseStats: pre-price-filter stats for price color coding
+        if has_price_filter:
+            base_stats = _compute_stats(non_price_prices)
+        else:
+            base_stats = None
     else:
         available_filters = None
         stats = None
+        base_stats = None
 
     return EbayItemsResponse(
         items=items,
         stats=stats,
+        baseStats=base_stats,
         availableFilters=available_filters or None,
         pagination=Pagination(skip=skip, limit=limit, total=len(all_items)),
     )

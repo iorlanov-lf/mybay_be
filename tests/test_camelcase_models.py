@@ -446,23 +446,29 @@ def test_compute_price_buckets_returns_none_for_fewer_than_3():
     assert _compute_price_buckets([100.0, 200.0]) is None
 
 def test_compute_price_buckets_returns_buckets():
-    """Price buckets returns correct number of buckets."""
+    """Price buckets returns fixed $100 range buckets."""
     prices = [100.0, 200.0, 300.0, 400.0, 500.0]
-    buckets = _compute_price_buckets(prices, num_buckets=4)
+    buckets = _compute_price_buckets(prices)
     assert buckets is not None
-    assert len(buckets) == 4
-    assert buckets[0].rangeMin == 100.0
-    assert buckets[-1].rangeMax == 500.0
+    # $1-100, $101-200, $201-300, $301-400, $401-500
+    assert len(buckets) == 5
+    assert buckets[0].rangeMin == 1
+    assert buckets[0].rangeMax == 100
+    assert buckets[-1].rangeMin == 401
+    assert buckets[-1].rangeMax == 500
     total = sum(b.count for b in buckets)
     assert total == 5
 
 def test_compute_price_buckets_all_same_price():
-    """Price buckets handles all identical prices."""
+    """Price buckets handles all identical prices in one bucket."""
     prices = [250.0, 250.0, 250.0]
     buckets = _compute_price_buckets(prices)
     assert buckets is not None
-    assert len(buckets) == 1
-    assert buckets[0].count == 3
+    # $1-100 (0), $101-200 (0), $201-300 (3)
+    assert len(buckets) == 3
+    assert buckets[2].count == 3
+    assert buckets[2].rangeMin == 201
+    assert buckets[2].rangeMax == 300
 
 def test_compute_price_buckets_in_stats_response():
     """Stats model includes priceBuckets field."""
@@ -526,9 +532,9 @@ def test_compute_price_buckets_respects_price_cap():
     buckets_capped = _compute_price_buckets(prices_under_cap)
     buckets_uncapped = _compute_price_buckets(prices_with_bogus)
 
-    # Capped buckets should span 100-500, uncapped 100-9999
-    assert buckets_capped[-1].rangeMax == 500.0
-    assert buckets_uncapped[-1].rangeMax == 9999.0
+    # Capped: last bucket is $401-$500; uncapped: extends to $9901-$10000
+    assert buckets_capped[-1].rangeMax == 500
+    assert buckets_uncapped[-1].rangeMax == 10000
     # Verifies that filtering before calling _compute_price_buckets works
     assert sum(b.count for b in buckets_capped) == 5
 
