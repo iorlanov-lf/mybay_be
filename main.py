@@ -316,6 +316,13 @@ PRICE_CAP = {
 }
 
 
+@app.get("/ebay/search-templates")
+def get_search_templates(productName: str = Query(...)):
+    collection = db["search_templates"]
+    docs = list(collection.find({"productName": productName}, {"_id": 0}))
+    return docs
+
+
 @app.post("/ebay/items", response_model=EbayItemsResponse)
 def ebay_items(request: EbayItemsRequest):
     collection = None

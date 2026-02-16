@@ -174,4 +174,31 @@ def test_ebay_items_page1_has_available_filters(client, mock_db):
     assert "ramSize" in data["availableFilters"]
 
 
+# ── Integration tests: Search Templates ──
+
+
+def test_search_templates_returns_matching_docs(client):
+    """GET /ebay/search-templates returns docs matching productName."""
+    fake_docs = [
+        {"productName": "MacBook Pro", "templateName": "Budget", "templateDescription": "Under $500", "filters": {"maxPrice": 500}},
+        {"productName": "MacBook Pro", "templateName": "RAM", "templateDescription": "32GB+", "filters": {"ram": "32"}},
+    ]
+    fake_col = MagicMock()
+    fake_col.find.return_value = [dict(d, _id="fake") for d in fake_docs]
+    fake_db = {"search_templates": fake_col, "mac_book_pro": FakeCollection(SAMPLE_ITEMS)}
+    with patch("main.db", fake_db):
+        response = client.get("/ebay/search-templates", params={"productName": "MacBook Pro"})
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert data[0]["templateName"] == "Budget"
+    fake_col.find.assert_called_once_with({"productName": "MacBook Pro"}, {"_id": 0})
+
+
+def test_search_templates_missing_param_returns_422(client):
+    """GET /ebay/search-templates without productName returns 422."""
+    response = client.get("/ebay/search-templates")
+    assert response.status_code == 422
+
+
 
