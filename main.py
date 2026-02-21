@@ -73,10 +73,13 @@ db = client["mybaydb"]
 DERIVED_FILTER_FIELDS = [
     "releaseYear", "laptopModel", "modelNumber", "modelId", "partNumber",
     "cpuModel", "cpuFamily", "cpuSpeed", "ssdSize", "screenSize", "ramSize",
-    "color", "specsConflict", "specsQuality",
+    "color",
 ]
-# Sort/available-filter adds price and minDistance
-DERIVED_SORT_FIELDS = DERIVED_FILTER_FIELDS + ["price", "minDistance"]
+# Sort/available-filter adds price
+DERIVED_SORT_FIELDS = DERIVED_FILTER_FIELDS + ["price"]
+
+# Analysis fields used for filtering
+ANALYSIS_FILTER_FIELDS = ["specsCompleteness", "specsConsistency"]
 
 LLM_FIELDS = [
     "charger", "battery", "screen", "keyboard", "housing",
@@ -96,8 +99,14 @@ RANK_SORT_MAP = {
     "charger": "llmDerived.chargerRank",
     "componentListing": "llmDerived.componentListingRank",
     "condition": "derived.conditionRank",
-    "specsQuality": "derived.specsQualityRank",
+    "specsCompleteness": "derived.specsCompletenessRank",
+    "specsConsistency": "derived.specsConsistencyRank",
 }
+
+# Derived spec fields that have bestGuess fallback in analysis
+BEST_GUESS_FIELDS = [
+    "releaseYear", "cpuFamily", "screenSize", "ramSize", "ssdSize",
+]
 
 
 @app.get("/")
@@ -137,38 +146,35 @@ def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = 
         return None
     query: Dict[str, Any] = {"$and": []}
 
-    def _append_derived_or_variant_filter(field_name: str, raw_value: Any) -> None:
+    def _append_derived_or_bestguess_filter(field_name: str, raw_value: Any) -> None:
         values = (
             list(raw_value)
             if isinstance(raw_value, Iterable) and not isinstance(raw_value, (str, bytes, bytearray))
             else [raw_value]
         )
-        query["$and"].append(
-            {
-                "$or": [
-                    {f"derived.{field_name}": {"$in": values}},
-                    {
-                        "$and": [
-                            {f"derived.{field_name}": {"$nin": values}},
-                            {
-                                "derived.variants": {
-                                    "$elemMatch": {
-                                        "distance": {"$lte": 1},
-                                        f"variant.{field_name}": {"$in": values},
-                                    }
-                                }
-                            },
-                        ]
-                    },
-                ]
-            }
-        )
+        if field_name in BEST_GUESS_FIELDS:
+            query["$and"].append(
+                {
+                    "$or": [
+                        {f"derived.{field_name}": {"$in": values}},
+                        {f"analysis.specsAnalysis.{field_name}.bestGuess": {"$in": values}},
+                    ]
+                }
+            )
+        else:
+            query["$and"].append({f"derived.{field_name}": {"$in": values}})
 
-    # derived and variant fields
+    # derived fields (with bestGuess fallback for main specs)
     for derived_field in DERIVED_FILTER_FIELDS:
         value = filter_data.get(derived_field)
         if value is not None and value != []:
-            _append_derived_or_variant_filter(derived_field, value)
+            _append_derived_or_bestguess_filter(derived_field, value)
+
+    # analysis fields (specsCompleteness, specsConsistency)
+    for analysis_field in ANALYSIS_FILTER_FIELDS:
+        value = filter_data.get(analysis_field)
+        if value is not None and value != []:
+            query["$and"].append({f"analysis.{analysis_field}": {"$in": value if isinstance(value, list) else [value]}})
 
     # llmDerived fields
     for llm_field in LLM_FIELDS:
@@ -234,7 +240,7 @@ def _compute_price_buckets(prices: List[float]) -> Optional[List[PriceBucket]]:
     return buckets
 
 def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
-    target_fields = DERIVED_SORT_FIELDS + LLM_FIELDS + DETAILS_FIELDS
+    target_fields = DERIVED_SORT_FIELDS + ANALYSIS_FILTER_FIELDS + LLM_FIELDS + DETAILS_FIELDS
     value_counts: Dict[str, Dict[Any, int]] = {field: {} for field in target_fields}
 
     for doc in docs:
@@ -255,23 +261,26 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
                 _add(raw_value)
 
         derived = doc.get("derived") or {}
+        analysis = doc.get("analysis") or {}
         llmDerived = doc.get("llmDerived") or {}
         details = doc.get("details") or {}
         for field in DERIVED_SORT_FIELDS:
             _collect(field, derived.get(field))
+        for field in ANALYSIS_FILTER_FIELDS:
+            _collect(field, analysis.get(field))
         for field in LLM_FIELDS:
             _collect(field, llmDerived.get(field))
         _collect("returnable", details.get("returnTerms", {}).get("returnsAccepted"))
         _collect("condition", details.get("condition"))
 
-        for variant_entry in derived.get("variants") or []:
-            if variant_entry["distance"] > 1:
-                continue
-            variant_data = variant_entry.get("variant")
-            if isinstance(variant_data, dict):
-                for field in DERIVED_SORT_FIELDS:
-                    if not derived.get(field):
-                        _collect(field, variant_data.get(field))
+        # bestGuess fallback: include guessed values for main spec fields
+        specs_analysis = analysis.get("specsAnalysis") or {}
+        for field in BEST_GUESS_FIELDS:
+            if not derived.get(field):
+                entry = specs_analysis.get(field) or {}
+                best_guess = entry.get("bestGuess")
+                if best_guess:
+                    _collect(field, best_guess)
 
         for field, counts in value_counts.items():
             for val in doc_values[field]:
@@ -298,13 +307,8 @@ def _compose_sort_specs(sort_specs: Optional[List[SortSpecRequest]]) -> List[tup
             mongo_sort_specs.append((RANK_SORT_MAP[field], direction))
         elif field in DERIVED_SORT_FIELDS:
             mongo_sort_specs.append((f"derived.{field}", direction))
-        elif field in LLM_FIELDS:
-            mongo_sort_specs.append((f"llmDerived.{field}", direction))
-        elif field in DETAILS_FIELDS:
-            if field == "returnable":
-                mongo_sort_specs.append(("details.returnTerms.returnsAccepted", direction))
-            else:
-                mongo_sort_specs.append((f"details.{field}", direction))
+        elif field == "returnable":
+            mongo_sort_specs.append(("details.returnTerms.returnsAccepted", direction))
     if mongo_sort_specs:
         return mongo_sort_specs
     else:

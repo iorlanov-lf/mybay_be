@@ -116,11 +116,34 @@ class DerivedData(BaseModel):
     ramSize: Optional[List[int]] = None
     releaseYear: Optional[List[str]] = None
     color: Optional[List[str]] = None
-    specsConflict: Optional[bool] = None
+    conditionRank: Optional[int] = None
+    specsCompletenessRank: Optional[int] = None
+    specsConsistencyRank: Optional[int] = None
+
+
+class SpecAnalysisEntry(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    isSpecified: Optional[bool] = None
+    isConflicting: Optional[bool] = None
+    bestGuess: Optional[List[Any]] = None
+    guessConfidence: Optional[str] = None
+    issueDescription: Optional[str] = None
+    issueSeverity: Optional[str] = None
+
+
+class AnalysisData(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    specsAnalysis: Optional[Dict[str, SpecAnalysisEntry]] = None
+    mainSpecsIssueSeverity: Optional[str] = None
+    mainSpecsIssueDescription: Optional[List[str]] = None
+    variantAnalysis: Optional[str] = None
     variants: Optional[List[VariantMatch]] = None
     missing: Optional[List[str]] = None
     minDistance: Optional[float] = None
-    specsQuality: Optional[str] = None
+    specsCompleteness: Optional[str] = None
+    specsConsistency: Optional[str] = None
 
 
 class LlmDerived(BaseModel):
@@ -147,6 +170,7 @@ class EbayItem(BaseModel):
     updatedAt: Optional[datetime] = None
     processedAt: Optional[datetime] = None
     derived: Optional[DerivedData] = None
+    analysis: Optional[AnalysisData] = None
     llmDerived: Optional[LlmDerived] = None
 
 class SortSpecRequest(BaseModel):

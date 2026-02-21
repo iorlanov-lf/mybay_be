@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from datetime import datetime, timezone
 from models import (
-    DerivedData, LlmDerived, EbayItem, EbayItemsRequest,
+    DerivedData, AnalysisData, LlmDerived, EbayItem, EbayItemsRequest,
     EbayItemsResponse,
     Pagination, VariantSpec,
     ItemDetails, PriceBucket, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse,
@@ -36,13 +36,13 @@ def test_derived_data_json_keys_are_camelcase():
         modelId=["MacBookPro14,3"],
         partNumber=["MPTR2LL/A"],
         color=["Space Gray"],
-        specsConflict=False,
-        minDistance=0.0,
-        specsQuality="single match",
+        conditionRank=6,
+        specsCompletenessRank=1,
+        specsConsistencyRank=1,
     )
     data = d.model_dump()
     for key in data:
-        if key in {"description", "color", "variants", "missing", "price"}:
+        if key in {"description", "color", "price"}:
             continue
         assert "_" not in key, f"DerivedData key '{key}' is not camelCase"
 
@@ -173,7 +173,10 @@ def test_available_filter_values_uses_camelcase_keys():
                 "releaseYear": ["2017"],
                 "laptopModel": ["MacBook Pro"],
                 "color": ["Silver"],
-                "variants": [],
+            },
+            "analysis": {
+                "specsCompleteness": "Good",
+                "specsConsistency": "Good",
             },
             "llmDerived": {"componentListing": "N", "charger": "Y"},
             "details": {"condition": "Good - Refurbished"},
@@ -210,10 +213,16 @@ def test_compose_sort_specs_screen_uses_rank():
     assert specs == [("llmDerived.screenRank", 1)]
 
 
-def test_compose_sort_specs_specs_quality_uses_rank():
-    """Sorting by specsQuality should use derived.specsQualityRank."""
-    specs = _compose_sort_specs([_ss("specsQuality")])
-    assert specs == [("derived.specsQualityRank", 1)]
+def test_compose_sort_specs_specs_completeness_uses_rank():
+    """Sorting by specsCompleteness should use derived.specsCompletenessRank."""
+    specs = _compose_sort_specs([_ss("specsCompleteness")])
+    assert specs == [("derived.specsCompletenessRank", 1)]
+
+
+def test_compose_sort_specs_specs_consistency_uses_rank():
+    """Sorting by specsConsistency should use derived.specsConsistencyRank."""
+    specs = _compose_sort_specs([_ss("specsConsistency")])
+    assert specs == [("derived.specsConsistencyRank", 1)]
 
 
 def test_compose_sort_specs_numeric_field_no_rank():
@@ -278,19 +287,19 @@ def test_compose_sort_specs_price_descending():
     assert specs == [("derived.price", -1)]
 
 
-def test_derived_data_excludes_rank_fields():
-    """DerivedData with extra=ignore should strip rank fields from API output."""
+def test_derived_data_includes_rank_fields():
+    """DerivedData should include conditionRank, specsCompletenessRank, specsConsistencyRank."""
     d = DerivedData.model_validate({
         "price": 499.99,
-        "specsQuality": "single match",
         "conditionRank": 8,
-        "specsQualityRank": 1,
+        "specsCompletenessRank": 1,
+        "specsConsistencyRank": 1,
     })
     dumped = d.model_dump()
     assert "price" in dumped
-    assert "specsQuality" in dumped
-    assert "conditionRank" not in dumped
-    assert "specsQualityRank" not in dumped
+    assert dumped["conditionRank"] == 8
+    assert dumped["specsCompletenessRank"] == 1
+    assert dumped["specsConsistencyRank"] == 1
 
 
 def test_llm_derived_excludes_rank_fields():
@@ -415,26 +424,51 @@ def test_compose_query_price_range_none():
     assert query is None
 
 
-# ── Story 2.1: Specs Quality and Match Distance tests ──
+# ── Story 3.2a: Specs Completeness/Consistency and BestGuess tests ──
 
-def test_compose_query_specs_quality_filter():
-    """_compose_query with specsQuality produces correct derived path."""
-    query = _compose_query({"specsQuality": ["single match"]})
+def test_compose_query_specs_completeness_filter():
+    """_compose_query with specsCompleteness produces correct analysis path."""
+    query = _compose_query({"specsCompleteness": ["Good"]})
     query_str = str(query)
-    assert "derived.specsQuality" in query_str
-    assert "single match" in query_str
+    assert "analysis.specsCompleteness" in query_str
+    assert "Good" in query_str
 
 
-def test_compose_sort_specs_min_distance():
-    """Sorting by minDistance produces derived.minDistance path."""
-    specs = _compose_sort_specs([_ss("minDistance")])
-    assert specs == [("derived.minDistance", 1)]
+def test_compose_query_specs_consistency_filter():
+    """_compose_query with specsConsistency produces correct analysis path."""
+    query = _compose_query({"specsConsistency": ["Good"]})
+    query_str = str(query)
+    assert "analysis.specsConsistency" in query_str
 
 
-def test_compose_sort_specs_min_distance_descending():
-    """Sorting by minDistance descending produces correct direction."""
-    specs = _compose_sort_specs([_ss("minDistance", -1)])
-    assert specs == [("derived.minDistance", -1)]
+def test_compose_query_bestguess_fallback():
+    """_compose_query for main spec fields includes bestGuess fallback."""
+    query = _compose_query({"releaseYear": ["2017"]})
+    query_str = str(query)
+    assert "derived.releaseYear" in query_str
+    assert "analysis.specsAnalysis.releaseYear.bestGuess" in query_str
+
+
+def test_compose_query_non_bestguess_field():
+    """_compose_query for non-main spec fields does NOT include bestGuess fallback."""
+    query = _compose_query({"color": ["Silver"]})
+    query_str = str(query)
+    assert "derived.color" in query_str
+    assert "bestGuess" not in query_str
+
+
+def test_analysis_data_model():
+    """AnalysisData model validates and serializes correctly."""
+    a = AnalysisData(
+        specsCompleteness="Good",
+        specsConsistency="Good",
+        variantAnalysis="single match",
+        minDistance=0.0,
+    )
+    dumped = a.model_dump()
+    assert dumped["specsCompleteness"] == "Good"
+    assert dumped["specsConsistency"] == "Good"
+    assert dumped["variantAnalysis"] == "single match"
 
 
 # ── Story 2.3: Price Distribution Histogram ──
