@@ -86,7 +86,7 @@ LLM_FIELDS = [
     "audio", "ports", "functionality", "componentListing",
 ]
 
-DETAILS_FIELDS = ["returnable", "condition"]
+DETAILS_FIELDS = ["returnable", "returnShippingCostPayer", "condition"]
 
 RANK_SORT_MAP = {
     "screen": "llmDerived.screenRank",
@@ -187,6 +187,10 @@ def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = 
     if value is not None and value != []:
         query["$and"].append({"details.returnTerms.returnsAccepted": {"$in": value}})
 
+    value = filter_data.get("returnShippingCostPayer")
+    if value is not None and value != []:
+        query["$and"].append({"details.returnTerms.returnShippingCostPayer": {"$in": value}})
+
     value = filter_data.get("condition")
     if value is not None and value != []:
         query["$and"].append({"details.condition": {"$in": value}})
@@ -271,6 +275,7 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
         for field in LLM_FIELDS:
             _collect(field, llmDerived.get(field))
         _collect("returnable", details.get("returnTerms", {}).get("returnsAccepted"))
+        _collect("returnShippingCostPayer", details.get("returnTerms", {}).get("returnShippingCostPayer"))
         _collect("condition", details.get("condition"))
 
         # bestGuess fallback: include guessed values for main spec fields
@@ -309,6 +314,8 @@ def _compose_sort_specs(sort_specs: Optional[List[SortSpecRequest]]) -> List[tup
             mongo_sort_specs.append((f"derived.{field}", direction))
         elif field == "returnable":
             mongo_sort_specs.append(("details.returnTerms.returnsAccepted", direction))
+        elif field == "returnShippingCostPayer":
+            mongo_sort_specs.append(("details.returnTerms.returnShippingCostPayer", direction))
     if mongo_sort_specs:
         return mongo_sort_specs
     else:

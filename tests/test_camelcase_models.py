@@ -275,6 +275,19 @@ def test_compose_sort_specs_details_returnable():
     assert specs == [("details.returnTerms.returnsAccepted", 1)]
 
 
+def test_compose_query_return_shipping_cost_payer():
+    """_compose_query should filter on details.returnTerms.returnShippingCostPayer."""
+    query = _compose_query({"returnShippingCostPayer": ["SELLER"]})
+    query_str = str(query)
+    assert "details.returnTerms.returnShippingCostPayer" in query_str
+
+
+def test_compose_sort_specs_return_shipping_cost_payer():
+    """Sorting by returnShippingCostPayer should map to details.returnTerms.returnShippingCostPayer."""
+    specs = _compose_sort_specs([_ss("returnShippingCostPayer")])
+    assert specs == [("details.returnTerms.returnShippingCostPayer", 1)]
+
+
 def test_compose_sort_specs_unknown_field_fallback():
     """Unknown field should be ignored; if no valid fields, fall back to default."""
     specs = _compose_sort_specs([_ss("nonexistent")])
