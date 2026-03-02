@@ -161,12 +161,11 @@ def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = 
         )
         mongo_path = LLM_SPEC_FIELD_MAP[filter_key]
         if filter_key in BEST_GUESS_FIELDS:
-            llm_field_name = mongo_path.split(".")[-1]
             query["$and"].append(
                 {
                     "$or": [
                         {mongo_path: {"$in": values}},
-                        {f"llmAnalysis.specsAnalysis.{llm_field_name}.bestGuess": {"$in": values}},
+                        {f"llmAnalysis.specsAnalysis.{filter_key}.bestGuess": {"$in": values}},
                     ]
                 }
             )
@@ -301,12 +300,13 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
         _collect("condition", details.get("condition"))
 
         # bestGuess fallback from llmAnalysis.specsAnalysis
+        # specsAnalysis keys use derived field names (ssdSize, ramSize, screenSize, cpuSpeed)
         llm_specs_analysis = llmAnalysis.get("specsAnalysis") or {}
         for filter_key in BEST_GUESS_FIELDS:
             mongo_path = LLM_SPEC_FIELD_MAP[filter_key]
             llm_field_name = mongo_path.split(".")[-1]
             if not llmSpecs.get(llm_field_name):
-                entry = llm_specs_analysis.get(llm_field_name) or {}
+                entry = llm_specs_analysis.get(filter_key) or {}
                 best_guess = entry.get("bestGuess")
                 if best_guess:
                     _collect(filter_key, best_guess)

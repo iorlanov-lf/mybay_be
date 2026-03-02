@@ -189,7 +189,7 @@ def test_compose_query_spec_filter_routes_to_llm_specs():
     assert or_clause is not None
     or_arms = or_clause["$or"]
     assert any("llmSpecs.ramSizeGB" in arm for arm in or_arms)
-    assert any("llmAnalysis.specsAnalysis.ramSizeGB.bestGuess" in arm for arm in or_arms)
+    assert any("llmAnalysis.specsAnalysis.ramSize.bestGuess" in arm for arm in or_arms)
 
 
 def test_compose_query_product_line_routes_to_llm_specs():
@@ -217,14 +217,14 @@ def test_compose_query_subject_routes_to_llm_derived():
 
 
 def test_compose_query_screen_size_has_bestguess_fallback():
-    """screenSize filter includes bestGuess fallback from llmAnalysis.specsAnalysis.screenSizeInch."""
+    """screenSize filter includes bestGuess fallback from llmAnalysis.specsAnalysis.screenSize."""
     query = _compose_query({"screenSize": [15.4]})
     assert query is not None
     or_clause = next((c for c in query["$and"] if "$or" in c), None)
     assert or_clause is not None
     paths = [list(arm.keys())[0] for arm in or_clause["$or"]]
     assert "llmSpecs.screenSizeInch" in paths
-    assert "llmAnalysis.specsAnalysis.screenSizeInch.bestGuess" in paths
+    assert "llmAnalysis.specsAnalysis.screenSize.bestGuess" in paths
 
 
 def test_compose_query_no_derived_fields_queried():
@@ -278,8 +278,8 @@ def test_available_filter_values_bestguess_from_llm_analysis():
             "llmSpecs": {},  # empty — triggers bestGuess fallback
             "llmAnalysis": {
                 "specsAnalysis": {
-                    "ramSizeGB": {"bestGuess": [32]},
-                    "ssdSizeGB": {"bestGuess": [1024]},
+                    "ramSize": {"bestGuess": [32]},
+                    "ssdSize": {"bestGuess": [1024]},
                 }
             },
             "llmDerived": {},
