@@ -102,23 +102,26 @@ class VariantMatch(BaseModel):
 class DerivedData(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    description: Optional[str] = None
     price: Optional[float] = None
-    laptopModel: Optional[List[str]] = None
+    conditionRank: Optional[int] = None
+
+
+class LlmSpecs(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    productLine: Optional[List[str]] = None
     modelNumber: Optional[List[str]] = None
     modelId: Optional[List[str]] = None
     partNumber: Optional[List[str]] = None
-    cpuModel: Optional[List[str]] = None
-    cpuFamily: Optional[List[str]] = None
-    cpuSpeed: Optional[List[float]] = None
-    ssdSize: Optional[List[int]] = None
-    screenSize: Optional[List[float]] = None
-    ramSize: Optional[List[int]] = None
     releaseYear: Optional[List[str]] = None
+    cpuFamily: Optional[List[str]] = None
+    cpuModel: Optional[List[str]] = None
+    cpuSpeedGHz: Optional[List[float]] = None
+    ramSizeGB: Optional[List[int]] = None
+    ssdSizeGB: Optional[List[int]] = None
+    screenSizeInch: Optional[List[float]] = None
     color: Optional[List[str]] = None
-    conditionRank: Optional[int] = None
-    specsCompletenessRank: Optional[int] = None
-    specsConsistencyRank: Optional[int] = None
+    inferred: Optional[List[str]] = None
 
 
 class SpecAnalysisEntry(BaseModel):
@@ -146,6 +149,22 @@ class AnalysisData(BaseModel):
     specsConsistency: Optional[str] = None
 
 
+class LlmAnalysisData(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    specsAnalysis: Optional[Dict[str, SpecAnalysisEntry]] = None
+    mainSpecsIssueSeverity: Optional[str] = None
+    mainSpecsIssueDescription: Optional[List[str]] = None
+    variantAnalysis: Optional[str] = None
+    variants: Optional[List[VariantMatch]] = None
+    missing: Optional[List[str]] = None
+    minDistance: Optional[float] = None
+    specsCompleteness: Optional[str] = None
+    specsConsistency: Optional[str] = None
+    specsCompletenessRank: Optional[int] = None
+    specsConsistencyRank: Optional[int] = None
+
+
 class LlmDerived(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -158,6 +177,7 @@ class LlmDerived(BaseModel):
     ports: Optional[str] = None
     functionality: Optional[str] = None
     componentListing: Optional[str] = None
+    subject: Optional[str] = None
     return_: Optional[str] = Field(default=None, alias="return")
 
 
@@ -170,7 +190,8 @@ class EbayItem(BaseModel):
     updatedAt: Optional[datetime] = None
     processedAt: Optional[datetime] = None
     derived: Optional[DerivedData] = None
-    analysis: Optional[AnalysisData] = None
+    llmSpecs: Optional[LlmSpecs] = None
+    llmAnalysis: Optional[LlmAnalysisData] = None
     llmDerived: Optional[LlmDerived] = None
 
 class SortSpecRequest(BaseModel):

@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
-from main import app
+from main import app, _compose_query, _available_filter_values, LLM_SPEC_FIELD_MAP
 
 
 @pytest.fixture
@@ -10,20 +10,20 @@ def client():
         yield client
 
 
-def _make_item(item_id, price, screen="Good", laptop_model=None):
+def _make_item(item_id, price, screen="Good", product_line=None):
     """Build a minimal MongoDB document for integration tests."""
     return {
         "itemId": item_id,
         "details": {"title": f"MacBook {item_id}", "condition": "Used"},
-        "derived": {
-            "price": price,
-            "laptopModel": [laptop_model or "MacBook Pro 15\" 2019"],
+        "derived": {"price": price},
+        "llmSpecs": {
+            "productLine": [product_line or "MacBook Pro 15\" 2019"],
             "releaseYear": ["2019"],
-            "screenSize": [15.4],
-            "ramSize": [16],
-            "ssdSize": [256],
+            "screenSizeInch": [15.4],
+            "ramSizeGB": [16],
+            "ssdSizeGB": [256],
         },
-        "llmDerived": {"screen": screen, "componentListing": "N"},
+        "llmDerived": {"screen": screen, "subject": "L"},
     }
 
 
@@ -167,11 +167,129 @@ def test_ebay_items_page1_has_price_buckets(client, mock_db):
 
 
 def test_ebay_items_page1_has_available_filters(client, mock_db):
-    """Page 1 returns availableFilters with value counts."""
+    """Page 1 returns availableFilters with value counts sourced from llmSpecs."""
     response = client.post("/ebay/items", json={"name": "MacBookPro"})
     data = response.json()
     assert data["availableFilters"] is not None
+    # ramSize should be populated from llmSpecs.ramSizeGB
     assert "ramSize" in data["availableFilters"]
+    assert any(f["value"] == 16 for f in data["availableFilters"]["ramSize"])
+
+
+# ── Unit tests: filter query generation ──
+
+
+def test_compose_query_spec_filter_routes_to_llm_specs():
+    """Spec filter keys route to llmSpecs.* MongoDB paths."""
+    query = _compose_query({"ramSize": [16]})
+    assert query is not None
+    clauses = query["$and"]
+    # ramSize with bestGuess fallback → $or clause
+    or_clause = next((c for c in clauses if "$or" in c), None)
+    assert or_clause is not None
+    or_arms = or_clause["$or"]
+    assert any("llmSpecs.ramSizeGB" in arm for arm in or_arms)
+    assert any("llmAnalysis.specsAnalysis.ramSizeGB.bestGuess" in arm for arm in or_arms)
+
+
+def test_compose_query_product_line_routes_to_llm_specs():
+    """productLine filter routes to llmSpecs.productLine (no bestGuess fallback)."""
+    query = _compose_query({"productLine": ["MacBook Pro"]})
+    assert query is not None
+    clauses = query["$and"]
+    assert {"llmSpecs.productLine": {"$in": ["MacBook Pro"]}} in clauses
+
+
+def test_compose_query_analysis_routes_to_llm_analysis():
+    """specsCompleteness filter routes to llmAnalysis.specsCompleteness."""
+    query = _compose_query({"specsCompleteness": ["Good"]})
+    assert query is not None
+    clauses = query["$and"]
+    assert {"llmAnalysis.specsCompleteness": {"$in": ["Good"]}} in clauses
+
+
+def test_compose_query_subject_routes_to_llm_derived():
+    """subject filter routes to llmDerived.subject."""
+    query = _compose_query({"subject": ["L"]})
+    assert query is not None
+    clauses = query["$and"]
+    assert {"llmDerived.subject": {"$in": ["L"]}} in clauses
+
+
+def test_compose_query_screen_size_has_bestguess_fallback():
+    """screenSize filter includes bestGuess fallback from llmAnalysis.specsAnalysis.screenSizeInch."""
+    query = _compose_query({"screenSize": [15.4]})
+    assert query is not None
+    or_clause = next((c for c in query["$and"] if "$or" in c), None)
+    assert or_clause is not None
+    paths = [list(arm.keys())[0] for arm in or_clause["$or"]]
+    assert "llmSpecs.screenSizeInch" in paths
+    assert "llmAnalysis.specsAnalysis.screenSizeInch.bestGuess" in paths
+
+
+def test_compose_query_no_derived_fields_queried():
+    """No query clause should reference derived.* spec fields."""
+    query = _compose_query({
+        "ramSize": [16], "ssdSize": [256], "screenSize": [15.4],
+        "releaseYear": ["2019"], "cpuFamily": ["M1"],
+    })
+    import json
+    query_str = json.dumps(query)
+    # derived.price is still used for price, but no spec fields
+    assert "derived.ramSize" not in query_str
+    assert "derived.ssdSize" not in query_str
+    assert "derived.screenSize" not in query_str
+    assert "derived.releaseYear" not in query_str
+    assert "analysis.specsAnalysis" not in query_str
+
+
+def test_available_filter_values_from_llm_specs():
+    """Available filter values for spec fields are collected from llmSpecs, not derived."""
+    docs = [
+        {
+            "itemId": "x1",
+            "details": {},
+            "derived": {"price": 500.0},
+            "llmSpecs": {"ramSizeGB": [16], "ssdSizeGB": [512], "productLine": ["MacBook Pro"]},
+            "llmAnalysis": {"specsCompleteness": "Good"},
+            "llmDerived": {"subject": "L"},
+        }
+    ]
+    result = _available_filter_values(docs)
+    assert "ramSize" in result
+    assert any(f["value"] == 16 for f in result["ramSize"])
+    assert "ssdSize" in result
+    assert any(f["value"] == 512 for f in result["ssdSize"])
+    assert "productLine" in result
+    assert any(f["value"] == "MacBook Pro" for f in result["productLine"])
+    assert "specsCompleteness" in result
+    assert any(f["value"] == "Good" for f in result["specsCompleteness"])
+    # Legacy derived spec fields should NOT appear
+    assert "laptopModel" not in result
+
+
+def test_available_filter_values_bestguess_from_llm_analysis():
+    """BestGuess fallback values come from llmAnalysis.specsAnalysis, not analysis."""
+    docs = [
+        {
+            "itemId": "x2",
+            "details": {},
+            "derived": {"price": 600.0},
+            "llmSpecs": {},  # empty — triggers bestGuess fallback
+            "llmAnalysis": {
+                "specsAnalysis": {
+                    "ramSizeGB": {"bestGuess": [32]},
+                    "ssdSizeGB": {"bestGuess": [1024]},
+                }
+            },
+            "llmDerived": {},
+        }
+    ]
+    result = _available_filter_values(docs)
+    assert "ramSize" in result
+    assert any(f["value"] == 32 for f in result["ramSize"])
+    assert "ssdSize" in result
+    assert any(f["value"] == 1024 for f in result["ssdSize"])
 
 
 # ── Integration tests: Search Templates ──

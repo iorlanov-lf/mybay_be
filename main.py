@@ -69,21 +69,28 @@ client = MongoClient("mongodb://localhost:27017/")
 db = client["mybaydb"]
 
 # ── Shared field lists ──
-# Base derived fields used for filtering
-DERIVED_FILTER_FIELDS = [
-    "releaseYear", "laptopModel", "modelNumber", "modelId", "partNumber",
-    "cpuModel", "cpuFamily", "cpuSpeed", "ssdSize", "screenSize", "ramSize",
-    "color",
-]
-# Sort/available-filter adds price
-DERIVED_SORT_FIELDS = DERIVED_FILTER_FIELDS + ["price"]
+# LLM spec filter key → MongoDB llmSpecs path
+LLM_SPEC_FIELD_MAP: Dict[str, str] = {
+    "productLine": "llmSpecs.productLine",
+    "releaseYear": "llmSpecs.releaseYear",
+    "cpuFamily": "llmSpecs.cpuFamily",
+    "cpuModel": "llmSpecs.cpuModel",
+    "cpuSpeed": "llmSpecs.cpuSpeedGHz",
+    "ramSize": "llmSpecs.ramSizeGB",
+    "ssdSize": "llmSpecs.ssdSizeGB",
+    "screenSize": "llmSpecs.screenSizeInch",
+    "color": "llmSpecs.color",
+    "modelNumber": "llmSpecs.modelNumber",
+    "modelId": "llmSpecs.modelId",
+    "partNumber": "llmSpecs.partNumber",
+}
 
-# Analysis fields used for filtering
+# Analysis fields used for filtering (query llmAnalysis.*)
 ANALYSIS_FILTER_FIELDS = ["specsCompleteness", "specsConsistency"]
 
 LLM_FIELDS = [
     "charger", "battery", "screen", "keyboard", "housing",
-    "audio", "ports", "functionality", "componentListing",
+    "audio", "ports", "functionality", "componentListing", "subject",
 ]
 
 DETAILS_FIELDS = ["returnable", "returnShippingCostPayer", "condition"]
@@ -97,13 +104,13 @@ RANK_SORT_MAP = {
     "battery": "llmDerived.batteryRank",
     "functionality": "llmDerived.functionalityRank",
     "charger": "llmDerived.chargerRank",
-    "componentListing": "llmDerived.componentListingRank",
+    "subject": "llmDerived.subjectRank",
     "condition": "derived.conditionRank",
-    "specsCompleteness": "derived.specsCompletenessRank",
-    "specsConsistency": "derived.specsConsistencyRank",
+    "specsCompleteness": "llmAnalysis.specsCompletenessRank",
+    "specsConsistency": "llmAnalysis.specsConsistencyRank",
 }
 
-# Derived spec fields that have bestGuess fallback in analysis
+# Spec filter keys that have bestGuess fallback in llmAnalysis.specsAnalysis
 BEST_GUESS_FIELDS = [
     "releaseYear", "cpuFamily", "screenSize", "ramSize", "ssdSize",
 ]
@@ -146,35 +153,37 @@ def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = 
         return None
     query: Dict[str, Any] = {"$and": []}
 
-    def _append_derived_or_bestguess_filter(field_name: str, raw_value: Any) -> None:
+    def _append_llm_spec_or_bestguess_filter(filter_key: str, raw_value: Any) -> None:
         values = (
             list(raw_value)
             if isinstance(raw_value, Iterable) and not isinstance(raw_value, (str, bytes, bytearray))
             else [raw_value]
         )
-        if field_name in BEST_GUESS_FIELDS:
+        mongo_path = LLM_SPEC_FIELD_MAP[filter_key]
+        if filter_key in BEST_GUESS_FIELDS:
+            llm_field_name = mongo_path.split(".")[-1]
             query["$and"].append(
                 {
                     "$or": [
-                        {f"derived.{field_name}": {"$in": values}},
-                        {f"analysis.specsAnalysis.{field_name}.bestGuess": {"$in": values}},
+                        {mongo_path: {"$in": values}},
+                        {f"llmAnalysis.specsAnalysis.{llm_field_name}.bestGuess": {"$in": values}},
                     ]
                 }
             )
         else:
-            query["$and"].append({f"derived.{field_name}": {"$in": values}})
+            query["$and"].append({mongo_path: {"$in": values}})
 
-    # derived fields (with bestGuess fallback for main specs)
-    for derived_field in DERIVED_FILTER_FIELDS:
-        value = filter_data.get(derived_field)
+    # llmSpecs fields (with bestGuess fallback from llmAnalysis for main specs)
+    for filter_key in LLM_SPEC_FIELD_MAP:
+        value = filter_data.get(filter_key)
         if value is not None and value != []:
-            _append_derived_or_bestguess_filter(derived_field, value)
+            _append_llm_spec_or_bestguess_filter(filter_key, value)
 
-    # analysis fields (specsCompleteness, specsConsistency)
+    # llmAnalysis fields (specsCompleteness, specsConsistency)
     for analysis_field in ANALYSIS_FILTER_FIELDS:
         value = filter_data.get(analysis_field)
         if value is not None and value != []:
-            query["$and"].append({f"analysis.{analysis_field}": {"$in": value if isinstance(value, list) else [value]}})
+            query["$and"].append({f"llmAnalysis.{analysis_field}": {"$in": value if isinstance(value, list) else [value]}})
 
     # llmDerived fields
     for llm_field in LLM_FIELDS:
@@ -244,7 +253,8 @@ def _compute_price_buckets(prices: List[float]) -> Optional[List[PriceBucket]]:
     return buckets
 
 def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
-    target_fields = DERIVED_SORT_FIELDS + ANALYSIS_FILTER_FIELDS + LLM_FIELDS + DETAILS_FIELDS
+    spec_filter_keys = list(LLM_SPEC_FIELD_MAP.keys())
+    target_fields = spec_filter_keys + ["price"] + ANALYSIS_FILTER_FIELDS + LLM_FIELDS + DETAILS_FIELDS
     value_counts: Dict[str, Dict[Any, int]] = {field: {} for field in target_fields}
 
     for doc in docs:
@@ -264,28 +274,42 @@ def _available_filter_values(docs: List[Dict[str, Any]]) -> Dict[str, List[Any]]
             else:
                 _add(raw_value)
 
-        derived = doc.get("derived") or {}
-        analysis = doc.get("analysis") or {}
+        llmSpecs = doc.get("llmSpecs") or {}
+        llmAnalysis = doc.get("llmAnalysis") or {}
         llmDerived = doc.get("llmDerived") or {}
         details = doc.get("details") or {}
-        for field in DERIVED_SORT_FIELDS:
-            _collect(field, derived.get(field))
+        derived = doc.get("derived") or {}
+
+        # Spec values from llmSpecs (keyed by filter key name)
+        for filter_key, mongo_path in LLM_SPEC_FIELD_MAP.items():
+            llm_field_name = mongo_path.split(".")[-1]
+            _collect(filter_key, llmSpecs.get(llm_field_name))
+
+        # Price from derived
+        _collect("price", derived.get("price"))
+
+        # Quality fields from llmAnalysis
         for field in ANALYSIS_FILTER_FIELDS:
-            _collect(field, analysis.get(field))
+            _collect(field, llmAnalysis.get(field))
+
+        # LLM condition fields
         for field in LLM_FIELDS:
             _collect(field, llmDerived.get(field))
+
         _collect("returnable", details.get("returnTerms", {}).get("returnsAccepted"))
         _collect("returnShippingCostPayer", details.get("returnTerms", {}).get("returnShippingCostPayer"))
         _collect("condition", details.get("condition"))
 
-        # bestGuess fallback: include guessed values for main spec fields
-        specs_analysis = analysis.get("specsAnalysis") or {}
-        for field in BEST_GUESS_FIELDS:
-            if not derived.get(field):
-                entry = specs_analysis.get(field) or {}
+        # bestGuess fallback from llmAnalysis.specsAnalysis
+        llm_specs_analysis = llmAnalysis.get("specsAnalysis") or {}
+        for filter_key in BEST_GUESS_FIELDS:
+            mongo_path = LLM_SPEC_FIELD_MAP[filter_key]
+            llm_field_name = mongo_path.split(".")[-1]
+            if not llmSpecs.get(llm_field_name):
+                entry = llm_specs_analysis.get(llm_field_name) or {}
                 best_guess = entry.get("bestGuess")
                 if best_guess:
-                    _collect(field, best_guess)
+                    _collect(filter_key, best_guess)
 
         for field, counts in value_counts.items():
             for val in doc_values[field]:
@@ -310,8 +334,10 @@ def _compose_sort_specs(sort_specs: Optional[List[SortSpecRequest]]) -> List[tup
         direction = spec.direction
         if field in RANK_SORT_MAP:
             mongo_sort_specs.append((RANK_SORT_MAP[field], direction))
-        elif field in DERIVED_SORT_FIELDS:
-            mongo_sort_specs.append((f"derived.{field}", direction))
+        elif field in LLM_SPEC_FIELD_MAP:
+            mongo_sort_specs.append((LLM_SPEC_FIELD_MAP[field], direction))
+        elif field == "price":
+            mongo_sort_specs.append(("derived.price", direction))
         elif field == "returnable":
             mongo_sort_specs.append(("details.returnTerms.returnsAccepted", direction))
         elif field == "returnShippingCostPayer":

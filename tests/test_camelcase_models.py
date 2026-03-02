@@ -22,27 +22,16 @@ def _ss(field: str, direction: int = 1) -> SortSpecRequest:
 # ── Model serialization tests ──
 
 def test_derived_data_json_keys_are_camelcase():
-    """DerivedData model_dump keys should be camelCase."""
+    """DerivedData model_dump keys should be camelCase (price, conditionRank only)."""
     d = DerivedData(
-        laptopModel=["MacBook Pro"],
-        releaseYear=["2017"],
-        screenSize=[15.4],
-        ramSize=[16],
-        ssdSize=[512],
-        cpuModel=["i7-7820HQ"],
-        cpuFamily=["i7"],
-        cpuSpeed=[2.9],
-        modelNumber=["A1707"],
-        modelId=["MacBookPro14,3"],
-        partNumber=["MPTR2LL/A"],
-        color=["Space Gray"],
+        price=499.99,
         conditionRank=6,
-        specsCompletenessRank=1,
-        specsConsistencyRank=1,
     )
     data = d.model_dump()
+    assert "price" in data
+    assert "conditionRank" in data
     for key in data:
-        if key in {"description", "color", "price"}:
+        if key in {"price"}:
             continue
         assert "_" not in key, f"DerivedData key '{key}' is not camelCase"
 
@@ -138,11 +127,12 @@ def test_variant_spec_camelcase():
 # ── Query/filter helper tests ──
 
 def test_compose_query_uses_camelcase_derived_paths():
-    """_compose_query should use derived.releaseYear etc. paths."""
+    """_compose_query should use llmSpecs.releaseYear paths (not snake_case)."""
     query = _compose_query({"releaseYear": ["2017"]})
     query_str = str(query)
-    assert "derived.releaseYear" in query_str
+    assert "llmSpecs.releaseYear" in query_str
     assert "derived.release_year" not in query_str
+    assert "llmSpecs.release_year" not in query_str
 
 
 def test_compose_query_uses_llmDerived_path():
@@ -154,43 +144,43 @@ def test_compose_query_uses_llmDerived_path():
 
 
 def test_compose_sort_specs_derived_path():
-    """_compose_sort_specs should produce derived.releaseYear paths."""
+    """_compose_sort_specs should produce llmSpecs.releaseYear paths (not derived.*)."""
     specs = _compose_sort_specs([_ss("releaseYear", -1)])
-    assert specs == [("derived.releaseYear", -1)]
+    assert specs == [("llmSpecs.releaseYear", -1)]
 
 
 def test_compose_sort_specs_llm_path():
     """_compose_sort_specs should produce rank paths for categorical LLM fields."""
-    specs = _compose_sort_specs([_ss("componentListing")])
-    assert specs == [("llmDerived.componentListingRank", 1)]
+    specs = _compose_sort_specs([_ss("subject")])
+    assert specs == [("llmDerived.subjectRank", 1)]
 
 
 def test_available_filter_values_uses_camelcase_keys():
     """_available_filter_values should return camelCase field names as keys."""
     docs = [
         {
-            "derived": {
+            "derived": {"price": 500.0},
+            "llmSpecs": {
                 "releaseYear": ["2017"],
-                "laptopModel": ["MacBook Pro"],
+                "productLine": ["MacBook Pro"],
                 "color": ["Silver"],
             },
-            "analysis": {
+            "llmAnalysis": {
                 "specsCompleteness": "Good",
                 "specsConsistency": "Good",
             },
-            "llmDerived": {"componentListing": "N", "charger": "Y"},
+            "llmDerived": {"subject": "L", "charger": "Y"},
             "details": {"condition": "Good - Refurbished"},
         }
     ]
     result = _available_filter_values(docs)
     # camelCase keys should be present
     assert "releaseYear" in result
-    assert "laptopModel" in result
-    assert "componentListing" in result
+    assert "productLine" in result
+    assert "subject" in result
     # snake_case keys should NOT be present
     assert "release_year" not in result
-    assert "laptop_model" not in result
-    assert "component_listing" not in result
+    assert "product_line" not in result
 
 
 # ── Rank sort field tests (Story 1.9) ──
@@ -214,15 +204,15 @@ def test_compose_sort_specs_screen_uses_rank():
 
 
 def test_compose_sort_specs_specs_completeness_uses_rank():
-    """Sorting by specsCompleteness should use derived.specsCompletenessRank."""
+    """Sorting by specsCompleteness should use llmAnalysis.specsCompletenessRank."""
     specs = _compose_sort_specs([_ss("specsCompleteness")])
-    assert specs == [("derived.specsCompletenessRank", 1)]
+    assert specs == [("llmAnalysis.specsCompletenessRank", 1)]
 
 
 def test_compose_sort_specs_specs_consistency_uses_rank():
-    """Sorting by specsConsistency should use derived.specsConsistencyRank."""
+    """Sorting by specsConsistency should use llmAnalysis.specsConsistencyRank."""
     specs = _compose_sort_specs([_ss("specsConsistency")])
-    assert specs == [("derived.specsConsistencyRank", 1)]
+    assert specs == [("llmAnalysis.specsConsistencyRank", 1)]
 
 
 def test_compose_sort_specs_numeric_field_no_rank():
@@ -232,7 +222,7 @@ def test_compose_sort_specs_numeric_field_no_rank():
 
 
 def test_compose_sort_specs_all_llm_rank_fields():
-    """All 9 LLM categorical fields should map to rank paths."""
+    """All LLM categorical fields should map to rank paths."""
     llm_rank_fields = {
         "screen": "llmDerived.screenRank",
         "keyboard": "llmDerived.keyboardRank",
@@ -242,7 +232,7 @@ def test_compose_sort_specs_all_llm_rank_fields():
         "battery": "llmDerived.batteryRank",
         "functionality": "llmDerived.functionalityRank",
         "charger": "llmDerived.chargerRank",
-        "componentListing": "llmDerived.componentListingRank",
+        "subject": "llmDerived.subjectRank",
     }
     for field, expected_path in llm_rank_fields.items():
         specs = _compose_sort_specs([_ss(field)])
@@ -301,18 +291,17 @@ def test_compose_sort_specs_price_descending():
 
 
 def test_derived_data_includes_rank_fields():
-    """DerivedData should include conditionRank, specsCompletenessRank, specsConsistencyRank."""
+    """DerivedData should include conditionRank (specsRanks moved to LlmAnalysisData)."""
     d = DerivedData.model_validate({
         "price": 499.99,
         "conditionRank": 8,
-        "specsCompletenessRank": 1,
-        "specsConsistencyRank": 1,
     })
     dumped = d.model_dump()
     assert "price" in dumped
     assert dumped["conditionRank"] == 8
-    assert dumped["specsCompletenessRank"] == 1
-    assert dumped["specsConsistencyRank"] == 1
+    # specsCompletenessRank and specsConsistencyRank moved to LlmAnalysisData
+    assert "specsCompletenessRank" not in dumped
+    assert "specsConsistencyRank" not in dumped
 
 
 def test_llm_derived_excludes_rank_fields():
@@ -440,33 +429,33 @@ def test_compose_query_price_range_none():
 # ── Story 3.2a: Specs Completeness/Consistency and BestGuess tests ──
 
 def test_compose_query_specs_completeness_filter():
-    """_compose_query with specsCompleteness produces correct analysis path."""
+    """_compose_query with specsCompleteness produces correct llmAnalysis path."""
     query = _compose_query({"specsCompleteness": ["Good"]})
     query_str = str(query)
-    assert "analysis.specsCompleteness" in query_str
+    assert "llmAnalysis.specsCompleteness" in query_str
     assert "Good" in query_str
 
 
 def test_compose_query_specs_consistency_filter():
-    """_compose_query with specsConsistency produces correct analysis path."""
+    """_compose_query with specsConsistency produces correct llmAnalysis path."""
     query = _compose_query({"specsConsistency": ["Good"]})
     query_str = str(query)
-    assert "analysis.specsConsistency" in query_str
+    assert "llmAnalysis.specsConsistency" in query_str
 
 
 def test_compose_query_bestguess_fallback():
-    """_compose_query for main spec fields includes bestGuess fallback."""
+    """_compose_query for main spec fields includes bestGuess fallback from llmAnalysis."""
     query = _compose_query({"releaseYear": ["2017"]})
     query_str = str(query)
-    assert "derived.releaseYear" in query_str
-    assert "analysis.specsAnalysis.releaseYear.bestGuess" in query_str
+    assert "llmSpecs.releaseYear" in query_str
+    assert "llmAnalysis.specsAnalysis.releaseYear.bestGuess" in query_str
 
 
 def test_compose_query_non_bestguess_field():
     """_compose_query for non-main spec fields does NOT include bestGuess fallback."""
     query = _compose_query({"color": ["Silver"]})
     query_str = str(query)
-    assert "derived.color" in query_str
+    assert "llmSpecs.color" in query_str
     assert "bestGuess" not in query_str
 
 
