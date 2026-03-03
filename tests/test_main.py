@@ -19,9 +19,9 @@ def _make_item(item_id, price, screen="Good", product_line=None):
         "llmSpecs": {
             "productLine": [product_line or "MacBook Pro 15\" 2019"],
             "releaseYear": ["2019"],
-            "screenSizeInch": [15.4],
-            "ramSizeGB": [16],
-            "ssdSizeGB": [256],
+            "screenSize": [15.4],
+            "ramSize": [16],
+            "ssdSize": [256],
         },
         "llmDerived": {"screen": screen, "subject": "L"},
     }
@@ -171,7 +171,7 @@ def test_ebay_items_page1_has_available_filters(client, mock_db):
     response = client.post("/ebay/items", json={"name": "MacBookPro"})
     data = response.json()
     assert data["availableFilters"] is not None
-    # ramSize should be populated from llmSpecs.ramSizeGB
+    # ramSize should be populated from llmSpecs.ramSize
     assert "ramSize" in data["availableFilters"]
     assert any(f["value"] == 16 for f in data["availableFilters"]["ramSize"])
 
@@ -188,7 +188,7 @@ def test_compose_query_spec_filter_routes_to_llm_specs():
     or_clause = next((c for c in clauses if "$or" in c), None)
     assert or_clause is not None
     or_arms = or_clause["$or"]
-    assert any("llmSpecs.ramSizeGB" in arm for arm in or_arms)
+    assert any("llmSpecs.ramSize" in arm for arm in or_arms)
     assert any("llmAnalysis.specsAnalysis.ramSize.bestGuess" in arm for arm in or_arms)
 
 
@@ -223,7 +223,7 @@ def test_compose_query_screen_size_has_bestguess_fallback():
     or_clause = next((c for c in query["$and"] if "$or" in c), None)
     assert or_clause is not None
     paths = [list(arm.keys())[0] for arm in or_clause["$or"]]
-    assert "llmSpecs.screenSizeInch" in paths
+    assert "llmSpecs.screenSize" in paths
     assert "llmAnalysis.specsAnalysis.screenSize.bestGuess" in paths
 
 
@@ -250,7 +250,7 @@ def test_available_filter_values_from_llm_specs():
             "itemId": "x1",
             "details": {},
             "derived": {"price": 500.0},
-            "llmSpecs": {"ramSizeGB": [16], "ssdSizeGB": [512], "productLine": ["MacBook Pro"]},
+            "llmSpecs": {"ramSize": [16], "ssdSize": [512], "productLine": ["MacBook Pro"]},
             "llmAnalysis": {"specsCompleteness": "Good"},
             "llmDerived": {"subject": "L"},
         }

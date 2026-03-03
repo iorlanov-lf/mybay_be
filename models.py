@@ -116,10 +116,10 @@ class LlmSpecs(BaseModel):
     releaseYear: Optional[List[str]] = None
     cpuFamily: Optional[List[str]] = None
     cpuModel: Optional[List[str]] = None
-    cpuSpeedGHz: Optional[List[float]] = None
-    ramSizeGB: Optional[List[int]] = None
-    ssdSizeGB: Optional[List[int]] = None
-    screenSizeInch: Optional[List[float]] = None
+    cpuSpeed: Optional[List[float]] = None
+    ramSize: Optional[List[int]] = None
+    ssdSize: Optional[List[int]] = None
+    screenSize: Optional[List[float]] = None
     color: Optional[List[str]] = None
     inferred: Optional[List[str]] = None
 
