@@ -319,4 +319,33 @@ def test_search_templates_missing_param_returns_422(client):
     assert response.status_code == 422
 
 
+# ── Integration tests: MacBookAir routing ──
 
+
+def test_ebay_items_macbook_air_routes_to_air_collection(client):
+    """POST /ebay/items with name=MacBookAir uses mac_book_air collection."""
+    air_items = SAMPLE_ITEMS[:2]
+    fake_db = {
+        "mac_book_pro": FakeCollection([]),
+        "mac_book_air": FakeCollection(air_items),
+    }
+    with patch("main.db", fake_db):
+        response = client.post("/ebay/items", json={"name": "MacBookAir", "limit": 10})
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["items"]) == 2
+
+
+def test_ebay_items_by_ids_macbook_air_routes_to_air_collection(client):
+    """POST /ebay/items/by-ids with name=MacBookAir uses mac_book_air collection."""
+    item_id = SAMPLE_ITEMS[0]["itemId"]
+    fake_db = {
+        "mac_book_pro": FakeCollection([]),
+        "mac_book_air": FakeCollection(SAMPLE_ITEMS[:1]),
+    }
+    with patch("main.db", fake_db):
+        response = client.post("/ebay/items/by-ids", json={"name": "MacBookAir", "itemIds": [item_id]})
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["items"]) == 1
+    assert data["items"][0]["itemId"] == item_id

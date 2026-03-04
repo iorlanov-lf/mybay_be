@@ -36,6 +36,33 @@ TEMPLATES = [
             ],
         },
     },
+    {
+        "productName": "MacBookAir",
+        "templateName": "Budget under $400",
+        "templateDescription": "Affordable MacBook Air options under $400",
+        "filters": {"maxPrice": 400},
+    },
+    {
+        "productName": "MacBookAir",
+        "templateName": "M-series Chip",
+        "templateDescription": "Apple Silicon MacBook Air (M1, M2, M3, M4)",
+        "filters": {"cpuFamily": ["M1", "M2", "M3", "M4"]},
+    },
+    {
+        "productName": "MacBookAir",
+        "templateName": "Recent (2022+)",
+        "templateDescription": "MacBook Air models from 2022 onwards",
+        "filters": {"releaseYear": [2022, 2023, 2024, 2025]},
+    },
+    {
+        "productName": "MacBookAir",
+        "templateName": "Best Condition",
+        "templateDescription": "Listings with good specs completeness and consistency",
+        "filters": {
+            "specsCompleteness": ["Good"],
+            "specsConsistency": ["Good"],
+        },
+    },
 ]
 
 if __name__ == "__main__":

@@ -350,6 +350,7 @@ def _compose_sort_specs(sort_specs: Optional[List[SortSpecRequest]]) -> List[tup
 # Hard price cap per product — items above this price are excluded from all results
 PRICE_CAP = {
     "MacBookPro": 3000,
+    "MacBookAir": 1500,
 }
 
 
@@ -365,6 +366,8 @@ def ebay_items(request: EbayItemsRequest):
     collection = None
     if request.name == "MacBookPro":
         collection = db["mac_book_pro"]
+    elif request.name == "MacBookAir":
+        collection = db["mac_book_air"]
     if collection is None:
         raise HTTPException(status_code=404, detail="Model collection not found")
 
@@ -442,6 +445,8 @@ def ebay_items_by_ids(request: EbayItemsByIdsRequest):
     collection = None
     if request.name == "MacBookPro":
         collection = db["mac_book_pro"]
+    elif request.name == "MacBookAir":
+        collection = db["mac_book_air"]
     if collection is None:
         raise HTTPException(status_code=404, detail="Model collection not found")
 
