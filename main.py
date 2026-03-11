@@ -1,6 +1,7 @@
 import copy
 from collections.abc import Iterable
 from datetime import datetime, timezone
+import os
 from typing import Any, Dict, List, Optional
 from pydantic import ValidationError
 
@@ -16,7 +17,11 @@ app = FastAPI()
 # Add CORS middleware to allow all origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://ulaptop.ai",          # Your main domain
+        "https://www.ulaptop.ai",      # The redirect origin
+        "http://localhost:5173"        # Your local development
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,7 +70,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 # MongoDB connection setup
-client = MongoClient("mongodb://localhost:27017/")
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
+client = MongoClient(MONGODB_URL)
 db = client["mybaydb"]
 
 # ── Shared field lists ──

@@ -1,0 +1,29 @@
+# Git and IDEs
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# Python virtual environment and caches
+mybay_be_env/
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ipynb_checkpoints
+
+# Project specific and development only
+scripts/
+tests/
+docs/
+*.md
+dev_requirements.txt
+
+# Docker itself (no need to copy the Dockerfile into the image)
+Dockerfile
+docker-compose*
+.dockerignore
+
