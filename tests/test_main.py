@@ -1,7 +1,12 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
-from main import app, _compose_query, _available_filter_values, LLM_SPEC_FIELD_MAP
+from typing import Any, Dict, List
+from main import app
+from get_items import (
+    _compose_query, _build_price_match, _build_aggregation_pipeline,
+    LLM_SPEC_FIELD_MAP, BEST_GUESS_FIELDS, ANALYSIS_FILTER_FIELDS, LLM_FIELDS,
+)
 
 
 @pytest.fixture
@@ -52,17 +57,109 @@ class FakeCursor:
         return len(self._docs)
 
 
+def _fake_filter_value_facet(docs: List[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
+    """Build {_id, count} list for a filter key from docs (mirrors MongoDB facet output)."""
+    counts: Dict[Any, int] = {}
+    for doc in docs:
+        llm_specs = doc.get("llmSpecs") or {}
+        llm_analysis = doc.get("llmAnalysis") or {}
+        llm_derived = doc.get("llmDerived") or {}
+        details = doc.get("details") or {}
+        values: set = set()
+        if key in BEST_GUESS_FIELDS:
+            mongo_field = LLM_SPEC_FIELD_MAP[key].split(".")[-1]
+            spec_vals = llm_specs.get(mongo_field) or []
+            bg_vals = ((llm_analysis.get("specsAnalysis") or {}).get(key) or {}).get("bestGuess") or []
+            for v in (spec_vals if isinstance(spec_vals, list) else [spec_vals]):
+                if v is not None:
+                    values.add(v)
+            for v in (bg_vals if isinstance(bg_vals, list) else [bg_vals]):
+                if v is not None:
+                    values.add(v)
+        elif key in LLM_SPEC_FIELD_MAP:
+            mongo_field = LLM_SPEC_FIELD_MAP[key].split(".")[-1]
+            spec_vals = llm_specs.get(mongo_field) or []
+            for v in (spec_vals if isinstance(spec_vals, list) else [spec_vals]):
+                if v is not None:
+                    values.add(v)
+        elif key in ANALYSIS_FILTER_FIELDS:
+            v = llm_analysis.get(key)
+            if v is not None:
+                values.add(v)
+        elif key in LLM_FIELDS:
+            v = llm_derived.get(key)
+            if v is not None:
+                values.add(v)
+        elif key == "returnable":
+            v = (details.get("returnTerms") or {}).get("returnsAccepted")
+            if v is not None:
+                values.add(v)
+        elif key == "returnShippingCostPayer":
+            v = (details.get("returnTerms") or {}).get("returnShippingCostPayer")
+            if v is not None:
+                values.add(v)
+        elif key == "condition":
+            v = details.get("condition")
+            if v is not None:
+                values.add(v)
+        for v in values:
+            counts[v] = counts.get(v, 0) + 1
+    return [{"_id": k, "count": v} for k, v in sorted(counts.items(), key=lambda x: (isinstance(x[0], str), x[0]))]
+
+
 class FakeCollection:
     """In-memory MongoDB collection fake for integration tests."""
 
     def __init__(self, docs):
         self._docs = list(docs)
 
-    def find(self, query=None):
+    def find(self, query=None, *args, **kwargs):
         if not query:
             return FakeCursor(self._docs)
-        # Simplified: return all docs (query filtering tested via unit tests)
         return FakeCursor(self._docs)
+
+    def aggregate(self, pipeline):
+        facet_stage = next((s["$facet"] for s in pipeline if "$facet" in s), {})
+        items_pipe = facet_stage.get("items", [])
+        skip = next((s["$skip"] for s in items_pipe if "$skip" in s), 0)
+        limit = next((s["$limit"] for s in items_pipe if "$limit" in s), 10)
+        docs = self._docs
+        result: Dict[str, Any] = {}
+
+        result["totalCount"] = [{"n": len(docs)}]
+        result["items"] = docs[skip:skip + limit]
+
+        if "stats" in facet_stage or "baseStats" in facet_stage:
+            prices = sorted([float(d["derived"]["price"]) for d in docs if d.get("derived", {}).get("price") is not None])
+            if prices:
+                n = len(prices)
+                med = prices[n // 2] if n % 2 == 1 else (prices[n // 2 - 1] + prices[n // 2]) / 2
+                stats_doc = [{"_id": None, "min": prices[0], "max": prices[-1], "mean": sum(prices) / n, "median": med, "count": n}]
+            else:
+                stats_doc = []
+            if "stats" in facet_stage:
+                result["stats"] = stats_doc
+            if "baseStats" in facet_stage:
+                result["baseStats"] = stats_doc
+
+        if "priceBins" in facet_stage or "basePriceBins" in facet_stage:
+            prices = [float(d["derived"]["price"]) for d in docs if d.get("derived", {}).get("price") is not None]
+            bins: Dict[int, int] = {}
+            for p in prices:
+                bk = (int(p) // 100) * 100
+                bins[bk] = bins.get(bk, 0) + 1
+            bins_docs = [{"_id": k, "count": v} for k, v in sorted(bins.items())]
+            if "priceBins" in facet_stage:
+                result["priceBins"] = bins_docs
+            if "basePriceBins" in facet_stage:
+                result["basePriceBins"] = bins_docs
+
+        known = {"totalCount", "items", "stats", "baseStats", "priceBins", "basePriceBins"}
+        for key in facet_stage:
+            if key not in known:
+                result[key] = _fake_filter_value_facet(docs, key)
+
+        return iter([result])
 
 
 @pytest.fixture
@@ -70,7 +167,7 @@ def mock_db():
     """Patch main.db to use FakeCollection with SAMPLE_ITEMS."""
     fake_col = FakeCollection(SAMPLE_ITEMS)
     fake_db = {"mac_book_pro": fake_col}
-    with patch("main.db", fake_db):
+    with patch("mongo.db", fake_db):
         yield fake_db
 
 
@@ -243,53 +340,63 @@ def test_compose_query_no_derived_fields_queried():
     assert "analysis.specsAnalysis" not in query_str
 
 
-def test_available_filter_values_from_llm_specs():
-    """Available filter values for spec fields are collected from llmSpecs, not derived."""
-    docs = [
-        {
-            "itemId": "x1",
-            "details": {},
-            "derived": {"price": 500.0},
-            "llmSpecs": {"ramSize": [16], "ssdSize": [512], "productLine": ["MacBook Pro"]},
-            "llmAnalysis": {"specsCompleteness": "Good"},
-            "llmDerived": {"subject": "L"},
-        }
-    ]
-    result = _available_filter_values(docs)
-    assert "ramSize" in result
-    assert any(f["value"] == 16 for f in result["ramSize"])
-    assert "ssdSize" in result
-    assert any(f["value"] == 512 for f in result["ssdSize"])
-    assert "productLine" in result
-    assert any(f["value"] == "MacBook Pro" for f in result["productLine"])
-    assert "specsCompleteness" in result
-    assert any(f["value"] == "Good" for f in result["specsCompleteness"])
-    # Legacy derived spec fields should NOT appear
-    assert "laptopModel" not in result
+# ── Unit tests: pipeline building helpers ──
 
 
-def test_available_filter_values_bestguess_from_llm_analysis():
-    """BestGuess fallback values come from llmAnalysis.specsAnalysis, not analysis."""
-    docs = [
-        {
-            "itemId": "x2",
-            "details": {},
-            "derived": {"price": 600.0},
-            "llmSpecs": {},  # empty — triggers bestGuess fallback
-            "llmAnalysis": {
-                "specsAnalysis": {
-                    "ramSize": {"bestGuess": [32]},
-                    "ssdSize": {"bestGuess": [1024]},
-                }
-            },
-            "llmDerived": {},
-        }
-    ]
-    result = _available_filter_values(docs)
-    assert "ramSize" in result
-    assert any(f["value"] == 32 for f in result["ramSize"])
-    assert "ssdSize" in result
-    assert any(f["value"] == 1024 for f in result["ssdSize"])
+def test_build_price_match_with_price_filter():
+    """_build_price_match extracts price range as MongoDB condition."""
+    result = _build_price_match({"minPrice": 500, "maxPrice": 1500})
+    assert result == {"derived.price": {"$gte": 500, "$lte": 1500}}
+
+
+def test_build_price_match_without_price_filter():
+    """_build_price_match returns None when no price range in filter."""
+    assert _build_price_match(None) is None
+    assert _build_price_match({}) is None
+    assert _build_price_match({"ramSize": [16]}) is None
+
+
+def test_build_aggregation_pipeline_page1_has_all_facets():
+    """Page 1 pipeline includes stats, priceBins, and filter value facets."""
+    pipeline = _build_aggregation_pipeline(
+        match_query=None, sort_specs=[("derived.price", 1)],
+        skip=0, limit=10, is_first_page=True, price_match=None,
+    )
+    facet_stage = next(s["$facet"] for s in pipeline if "$facet" in s)
+    assert "totalCount" in facet_stage
+    assert "items" in facet_stage
+    assert "stats" in facet_stage
+    assert "priceBins" in facet_stage
+    assert "ramSize" in facet_stage
+    assert "screen" in facet_stage
+
+
+def test_build_aggregation_pipeline_page2_has_only_count_and_items():
+    """Page 2+ pipeline contains only totalCount and items facets."""
+    pipeline = _build_aggregation_pipeline(
+        match_query=None, sort_specs=[("derived.price", 1)],
+        skip=10, limit=10, is_first_page=False, price_match=None,
+    )
+    facet_stage = next(s["$facet"] for s in pipeline if "$facet" in s)
+    assert "totalCount" in facet_stage
+    assert "items" in facet_stage
+    assert "stats" not in facet_stage
+    assert "priceBins" not in facet_stage
+    assert "ramSize" not in facet_stage
+
+
+def test_build_aggregation_pipeline_with_price_filter_has_base_facets():
+    """Page 1 with price filter includes baseStats and basePriceBins."""
+    price_match = {"derived.price": {"$gte": 500, "$lte": 1500}}
+    pipeline = _build_aggregation_pipeline(
+        match_query=None, sort_specs=[("derived.price", 1)],
+        skip=0, limit=10, is_first_page=True, price_match=price_match,
+    )
+    facet_stage = next(s["$facet"] for s in pipeline if "$facet" in s)
+    assert "baseStats" in facet_stage
+    assert "basePriceBins" in facet_stage
+    assert "stats" in facet_stage
+    assert "priceBins" not in facet_stage
 
 
 # ── Integration tests: Search Templates ──
@@ -304,7 +411,7 @@ def test_search_templates_returns_matching_docs(client):
     fake_col = MagicMock()
     fake_col.find.return_value = [dict(d, _id="fake") for d in fake_docs]
     fake_db = {"search_templates": fake_col, "mac_book_pro": FakeCollection(SAMPLE_ITEMS)}
-    with patch("main.db", fake_db):
+    with patch("mongo.db", fake_db):
         response = client.get("/ebay/search-templates", params={"productName": "MacBook Pro"})
     assert response.status_code == 200
     data = response.json()
@@ -329,7 +436,7 @@ def test_ebay_items_macbook_air_routes_to_air_collection(client):
         "mac_book_pro": FakeCollection([]),
         "mac_book_air": FakeCollection(air_items),
     }
-    with patch("main.db", fake_db):
+    with patch("mongo.db", fake_db):
         response = client.post("/ebay/items", json={"name": "MacBookAir", "limit": 10})
     assert response.status_code == 200
     data = response.json()
@@ -343,7 +450,7 @@ def test_ebay_items_by_ids_macbook_air_routes_to_air_collection(client):
         "mac_book_pro": FakeCollection([]),
         "mac_book_air": FakeCollection(SAMPLE_ITEMS[:1]),
     }
-    with patch("main.db", fake_db):
+    with patch("mongo.db", fake_db):
         response = client.post("/ebay/items/by-ids", json={"name": "MacBookAir", "itemIds": [item_id]})
     assert response.status_code == 200
     data = response.json()

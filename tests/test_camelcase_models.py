@@ -11,7 +11,7 @@ from models import (
     ItemDetails, PriceBucket, Stats, ErrorDetail, ErrorEnvelope, ErrorResponse,
     SortSpecRequest,
 )
-from main import _compose_query, _compose_sort_specs, _available_filter_values, _compute_price_buckets, _compute_stats
+from get_items import _compose_query, _compose_sort_specs
 
 
 def _ss(field: str, direction: int = 1) -> SortSpecRequest:
@@ -153,34 +153,6 @@ def test_compose_sort_specs_llm_path():
     """_compose_sort_specs should produce rank paths for categorical LLM fields."""
     specs = _compose_sort_specs([_ss("subject")])
     assert specs == [("llmDerived.subjectRank", 1)]
-
-
-def test_available_filter_values_uses_camelcase_keys():
-    """_available_filter_values should return camelCase field names as keys."""
-    docs = [
-        {
-            "derived": {"price": 500.0},
-            "llmSpecs": {
-                "releaseYear": ["2017"],
-                "productLine": ["MacBook Pro"],
-                "color": ["Silver"],
-            },
-            "llmAnalysis": {
-                "specsCompleteness": "Good",
-                "specsConsistency": "Good",
-            },
-            "llmDerived": {"subject": "L", "charger": "Y"},
-            "details": {"condition": "Good - Refurbished"},
-        }
-    ]
-    result = _available_filter_values(docs)
-    # camelCase keys should be present
-    assert "releaseYear" in result
-    assert "productLine" in result
-    assert "subject" in result
-    # snake_case keys should NOT be present
-    assert "release_year" not in result
-    assert "product_line" not in result
 
 
 # ── Rank sort field tests (Story 1.9) ──
@@ -473,39 +445,6 @@ def test_analysis_data_model():
     assert dumped["variantAnalysis"] == "single match"
 
 
-# ── Story 2.3: Price Distribution Histogram ──
-
-def test_compute_price_buckets_returns_none_for_fewer_than_3():
-    """Price buckets returns None when fewer than 3 prices."""
-    assert _compute_price_buckets([]) is None
-    assert _compute_price_buckets([100.0]) is None
-    assert _compute_price_buckets([100.0, 200.0]) is None
-
-def test_compute_price_buckets_returns_buckets():
-    """Price buckets returns fixed $100 range buckets."""
-    prices = [100.0, 200.0, 300.0, 400.0, 500.0]
-    buckets = _compute_price_buckets(prices)
-    assert buckets is not None
-    # $1-100, $101-200, $201-300, $301-400, $401-500
-    assert len(buckets) == 5
-    assert buckets[0].rangeMin == 1
-    assert buckets[0].rangeMax == 100
-    assert buckets[-1].rangeMin == 401
-    assert buckets[-1].rangeMax == 500
-    total = sum(b.count for b in buckets)
-    assert total == 5
-
-def test_compute_price_buckets_all_same_price():
-    """Price buckets handles all identical prices in one bucket."""
-    prices = [250.0, 250.0, 250.0]
-    buckets = _compute_price_buckets(prices)
-    assert buckets is not None
-    # $1-100 (0), $101-200 (0), $201-300 (3)
-    assert len(buckets) == 3
-    assert buckets[2].count == 3
-    assert buckets[2].rangeMin == 201
-    assert buckets[2].rangeMax == 300
-
 def test_compute_price_buckets_in_stats_response():
     """Stats model includes priceBuckets field."""
     buckets = [PriceBucket(rangeMin=0, rangeMax=100, count=5)]
@@ -559,48 +498,3 @@ def test_compose_query_exclude_price_default_false():
     assert "derived.price" in str(query)
 
 
-def test_compute_price_buckets_respects_price_cap():
-    """Price buckets computed from prices capped at product limit."""
-    # Simulate: 5 normal prices + 1 bogus price above cap
-    prices_under_cap = [100.0, 200.0, 300.0, 400.0, 500.0]
-    prices_with_bogus = prices_under_cap + [9999.0]
-
-    buckets_capped = _compute_price_buckets(prices_under_cap)
-    buckets_uncapped = _compute_price_buckets(prices_with_bogus)
-
-    # Capped: last bucket is $401-$500; uncapped: extends to $9901-$10000
-    assert buckets_capped[-1].rangeMax == 500
-    assert buckets_uncapped[-1].rangeMax == 10000
-    # Verifies that filtering before calling _compute_price_buckets works
-    assert sum(b.count for b in buckets_capped) == 5
-
-
-def test_compute_stats_returns_correct_values():
-    """_compute_stats computes min, max, median, mean, count correctly."""
-    prices = [100.0, 200.0, 300.0, 400.0, 500.0]
-    stats = _compute_stats(prices)
-    assert stats.min == 100.0
-    assert stats.max == 500.0
-    assert stats.median == 300.0
-    assert stats.mean == 300.0
-    assert stats.count == 5
-    assert stats.priceBuckets is None
-
-
-def test_compute_stats_even_count_median():
-    """_compute_stats computes median correctly for even-length lists."""
-    prices = [100.0, 200.0, 300.0, 400.0]
-    stats = _compute_stats(prices)
-    assert stats.median == 250.0
-
-
-def test_compute_stats_empty_returns_none():
-    """_compute_stats returns None for empty price list."""
-    assert _compute_stats([]) is None
-
-
-def test_compute_stats_with_price_buckets():
-    """_compute_stats passes through priceBuckets."""
-    buckets = [PriceBucket(rangeMin=100, rangeMax=200, count=3)]
-    stats = _compute_stats([100.0, 150.0, 200.0], buckets)
-    assert stats.priceBuckets == buckets

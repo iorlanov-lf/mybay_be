@@ -54,22 +54,6 @@ second_page_query_with_price_filter = [
                     }
                 }
             ], 
-            'priceBins': [
-                {
-                    '$bucket': {
-                        'groupBy': '$derived.price', 
-                        'boundaries': [
-                            0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000
-                        ], 
-                        'default': '3000+', 
-                        'output': {
-                            'count': {
-                                '$sum': 1
-                            }
-                        }
-                    }
-                }
-            ], 
             'releaseYearOptions': [
                 {
                     '$addFields': {
