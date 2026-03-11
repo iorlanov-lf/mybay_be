@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
 from typing import Any, Dict, List
 from main import app
@@ -41,20 +41,14 @@ SAMPLE_ITEMS = [
 ]
 
 
-class FakeCursor:
-    """Minimal cursor that supports .sort() chaining and iteration."""
+class FakeAsyncCursor:
+    """Async cursor stub that implements Motor's to_list() interface."""
 
     def __init__(self, docs):
         self._docs = list(docs)
 
-    def sort(self, keys):
-        return self
-
-    def __iter__(self):
-        return iter(self._docs)
-
-    def __len__(self):
-        return len(self._docs)
+    async def to_list(self, length=None):
+        return self._docs if length is None else self._docs[:length]
 
 
 def _fake_filter_value_facet(docs: List[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
@@ -114,9 +108,7 @@ class FakeCollection:
         self._docs = list(docs)
 
     def find(self, query=None, *args, **kwargs):
-        if not query:
-            return FakeCursor(self._docs)
-        return FakeCursor(self._docs)
+        return FakeAsyncCursor(self._docs)
 
     def aggregate(self, pipeline):
         facet_stage = next((s["$facet"] for s in pipeline if "$facet" in s), {})
@@ -159,7 +151,7 @@ class FakeCollection:
             if key not in known:
                 result[key] = _fake_filter_value_facet(docs, key)
 
-        return iter([result])
+        return FakeAsyncCursor([result])
 
 
 @pytest.fixture
@@ -409,7 +401,9 @@ def test_search_templates_returns_matching_docs(client):
         {"productName": "MacBook Pro", "templateName": "RAM", "templateDescription": "32GB+", "filters": {"ram": "32"}},
     ]
     fake_col = MagicMock()
-    fake_col.find.return_value = [dict(d, _id="fake") for d in fake_docs]
+    fake_cursor = MagicMock()
+    fake_cursor.to_list = AsyncMock(return_value=[dict(d, _id="fake") for d in fake_docs])
+    fake_col.find.return_value = fake_cursor
     fake_db = {"search_templates": fake_col, "mac_book_pro": FakeCollection(SAMPLE_ITEMS)}
     with patch("mongo.db", fake_db):
         response = client.get("/ebay/search-templates", params={"productName": "MacBook Pro"})

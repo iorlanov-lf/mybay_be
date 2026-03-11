@@ -362,7 +362,7 @@ def _parse_available_filters(
 
 
 @router.post("/ebay/items", response_model=EbayItemsResponse)
-def ebay_items(request: EbayItemsRequest):
+async def ebay_items(request: EbayItemsRequest):
     collection = None
     if request.name == "MacBookPro":
         collection = mongo.db["mac_book_pro"]
@@ -390,7 +390,7 @@ def ebay_items(request: EbayItemsRequest):
     price_match = _build_price_match(request.filter)
 
     pipeline = _build_aggregation_pipeline(match_query, mongo_sort_specs, skip, limit, is_first_page, price_match)
-    facet_result = list(collection.aggregate(pipeline))[0]
+    facet_result = (await collection.aggregate(pipeline).to_list(None))[0]
 
     total_docs = facet_result.get("totalCount", [])
     total = total_docs[0]["n"] if total_docs else 0

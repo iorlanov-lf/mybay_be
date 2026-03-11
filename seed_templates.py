@@ -1,8 +1,9 @@
 """Seed the search_templates collection with Quick Start filter templates."""
 
-from pymongo import MongoClient
+import asyncio
+from motor.motor_asyncio import AsyncIOMotorClient
 
-client = MongoClient("mongodb://localhost:27017/")
+client = AsyncIOMotorClient("mongodb://localhost:27017/")
 db = client["mybaydb"]
 collection = db["search_templates"]
 
@@ -65,7 +66,10 @@ TEMPLATES = [
     },
 ]
 
-if __name__ == "__main__":
-    collection.delete_many({})
-    result = collection.insert_many(TEMPLATES)
+async def seed():
+    await collection.delete_many({})
+    result = await collection.insert_many(TEMPLATES)
     print(f"Inserted {len(result.inserted_ids)} search templates")
+
+if __name__ == "__main__":
+    asyncio.run(seed())

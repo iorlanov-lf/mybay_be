@@ -74,13 +74,13 @@ def about() -> dict[str, str]:
 
 
 @app.get("/ebay/search-templates")
-def get_search_templates(productName: str = Query(...)):
-    docs = list(mongo.db["search_templates"].find({"productName": productName}, {"_id": 0}))
+async def get_search_templates(productName: str = Query(...)):
+    docs = await mongo.db["search_templates"].find({"productName": productName}, {"_id": 0}).to_list(None)
     return docs
 
 
 @app.post("/ebay/items/by-ids", response_model=EbayItemsByIdsResponse)
-def ebay_items_by_ids(request: EbayItemsByIdsRequest):
+async def ebay_items_by_ids(request: EbayItemsByIdsRequest):
     collection = None
     if request.name == "MacBookPro":
         collection = mongo.db["mac_book_pro"]
@@ -92,7 +92,7 @@ def ebay_items_by_ids(request: EbayItemsByIdsRequest):
     if not request.itemIds:
         return EbayItemsByIdsResponse(items=[])
 
-    docs = list(collection.find({"itemId": {"$in": request.itemIds}}))
+    docs = await collection.find({"itemId": {"$in": request.itemIds}}).to_list(None)
     items = [_document_to_ebay_item(doc) for doc in docs]
     return EbayItemsByIdsResponse(items=items)
 
