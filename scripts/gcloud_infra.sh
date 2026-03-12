@@ -25,14 +25,28 @@ gcloud artifacts repositories create ulaptop-repo \
 # list repositories to verify creation
 gcloud artifacts repositories list
 
-# create a secret for the MongoDB connection string (only need to do this once per project)
+# create secrets (only need to do this once per project or when a new secret value is needed)
 echo -n "mongodb+srv://{user}:{password}@ulaptop.hlfbhab.mongodb.net" | \
 gcloud secrets create MONGO_URI --data-file=-
+
+echo -n "{turnstile_secret}" | \
+gcloud secrets create TURNSTILE_SECRET_KEY --data-file=-
+
+echo -n "{api_bypass_key}" | \
+gcloud secrets create API_BYPASS_KEY --data-file=-
 
 # get the name of the service account
 gcloud run services describe ulaptop-be --region us-east4 --format="value(spec.template.spec.serviceAccountName)"
 # grant Cloud Run service account access to the secret (only need to do this once per project)
 gcloud secrets add-iam-policy-binding MONGO_URI \
+    --member="serviceAccount:{project_number}-compute@developer.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding TURNSTILE_SECRET_KEY \
+    --member="serviceAccount:{project_number}-compute@developer.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
+
+gcloud secrets add-iam-policy-binding API_BYPASS_KEY \
     --member="serviceAccount:{project_number}-compute@developer.gserviceaccount.com" \
     --role="roles/secretmanager.secretAccessor"
 

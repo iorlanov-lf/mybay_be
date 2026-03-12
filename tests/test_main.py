@@ -450,3 +450,118 @@ def test_ebay_items_by_ids_macbook_air_routes_to_air_collection(client):
     data = response.json()
     assert len(data["items"]) == 1
     assert data["items"][0]["itemId"] == item_id
+
+
+# ── Auth tests: Story 5.2 ──
+
+
+def test_verify_turnstile_dev_mode(client):
+    """POST /auth/verify with no TURNSTILE_SECRET_KEY returns 200 and session_token."""
+    response = client.post("/auth/verify", json={"token": "any-token"})
+    assert response.status_code == 200
+    data = response.json()
+    assert "session_token" in data
+    assert "." in data["session_token"]
+
+
+def test_verify_turnstile_success():
+    """POST /auth/verify with TURNSTILE_SECRET_KEY set and Cloudflare success returns session_token."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"success": True}
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with patch("auth.TURNSTILE_SECRET_KEY", "test-secret"):
+        with patch("auth.httpx.AsyncClient", return_value=mock_client):
+            with TestClient(app) as c:
+                response = c.post("/auth/verify", json={"token": "valid-token"})
+    assert response.status_code == 200
+    assert "session_token" in response.json()
+
+
+def test_verify_turnstile_failure():
+    """POST /auth/verify with Cloudflare failure returns 403."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"success": False}
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with patch("auth.TURNSTILE_SECRET_KEY", "test-secret"):
+        with patch("auth.httpx.AsyncClient", return_value=mock_client):
+            with TestClient(app) as c:
+                response = c.post("/auth/verify", json={"token": "bad-token"})
+    assert response.status_code == 403
+
+
+def test_ebay_items_no_token_dev_mode(client, mock_db):
+    """Without TURNSTILE_SECRET_KEY, /ebay/items passes through (no auth required)."""
+    response = client.post("/ebay/items", json={"name": "MacBookPro"})
+    assert response.status_code == 200
+
+
+def test_ebay_items_valid_session_token(mock_db):
+    """Valid X-Session-Token header → 200."""
+    import auth as auth_mod
+    jwt_key = "test-jwt"
+    with patch("auth.JWT_SECRET_KEY", jwt_key):
+        token = auth_mod._create_session_token()
+    with patch("auth.TURNSTILE_SECRET_KEY", "test-secret"):
+        with patch("auth.JWT_SECRET_KEY", jwt_key):
+            with TestClient(app) as c:
+                response = c.post(
+                    "/ebay/items",
+                    json={"name": "MacBookPro"},
+                    headers={"X-Session-Token": token},
+                )
+    assert response.status_code == 200
+
+
+def test_ebay_items_invalid_session_token():
+    """Invalid X-Session-Token header → 401."""
+    with patch("auth.TURNSTILE_SECRET_KEY", "test-secret"):
+        with TestClient(app) as c:
+            response = c.post(
+                "/ebay/items",
+                json={"name": "MacBookPro"},
+                headers={"X-Session-Token": "invalid.token"},
+            )
+    assert response.status_code == 401
+
+
+def test_ebay_items_expired_session_token():
+    """Expired X-Session-Token → 401."""
+    import time
+    import hashlib
+    import hmac as _hmac
+    jwt_key = "test-jwt"
+    exp = int(time.time()) - 10  # already expired
+    sig = _hmac.new(jwt_key.encode(), str(exp).encode(), hashlib.sha256).hexdigest()
+    expired_token = f"{exp}.{sig}"
+
+    with patch("auth.TURNSTILE_SECRET_KEY", "test-secret"):
+        with patch("auth.JWT_SECRET_KEY", jwt_key):
+            with TestClient(app) as c:
+                response = c.post(
+                    "/ebay/items",
+                    json={"name": "MacBookPro"},
+                    headers={"X-Session-Token": expired_token},
+                )
+    assert response.status_code == 401
+
+
+def test_ebay_items_api_key_bypass(mock_db):
+    """Valid X-Api-Key header bypasses session token check → 200."""
+    bypass_key = "my-secret-bypass"
+    with patch("auth.TURNSTILE_SECRET_KEY", "test-secret"):
+        with patch("auth.API_BYPASS_KEY", bypass_key):
+            with TestClient(app) as c:
+                response = c.post(
+                    "/ebay/items",
+                    json={"name": "MacBookPro"},
+                    headers={"X-Api-Key": bypass_key},
+                )
+    assert response.status_code == 200

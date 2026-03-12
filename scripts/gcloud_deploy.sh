@@ -5,7 +5,9 @@ gcloud init
 gcloud run deploy ulaptop-be \
   --image us-east4-docker.pkg.dev/ulaptop/ulaptop-repo/ulaptop-be:latest \
   --region us-east4 \
-  --set-secrets="MONGODB_URL=MONGO_URI:latest" \
+  --set-secrets="MONGODB_URL=MONGO_URI:latest,\
+TURNSTILE_SECRET_KEY=TURNSTILE_SECRET_KEY:latest,\
+API_BYPASS_KEY=API_BYPASS_KEY:latest" \
   --allow-unauthenticated \
   --port 8080
 

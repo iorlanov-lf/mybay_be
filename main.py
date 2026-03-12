@@ -1,10 +1,11 @@
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from models import EbayItemsByIdsRequest, EbayItemsByIdsResponse, ErrorDetail, ErrorEnvelope, ErrorResponse
 
 import mongo
+from auth import router as auth_router, verify_session
 from util import _document_to_ebay_item
 
 app = FastAPI()
@@ -74,13 +75,13 @@ def about() -> dict[str, str]:
 
 
 @app.get("/ebay/search-templates")
-async def get_search_templates(productName: str = Query(...)):
+async def get_search_templates(productName: str = Query(...), _: None = Depends(verify_session)):
     docs = await mongo.db["search_templates"].find({"productName": productName}, {"_id": 0}).to_list(None)
     return docs
 
 
 @app.post("/ebay/items/by-ids", response_model=EbayItemsByIdsResponse)
-async def ebay_items_by_ids(request: EbayItemsByIdsRequest):
+async def ebay_items_by_ids(request: EbayItemsByIdsRequest, _: None = Depends(verify_session)):
     collection = None
     if request.name == "MacBookPro":
         collection = mongo.db["mac_book_pro"]
@@ -97,5 +98,7 @@ async def ebay_items_by_ids(request: EbayItemsByIdsRequest):
     return EbayItemsByIdsResponse(items=items)
 
 
+app.include_router(auth_router)
+
 from get_items import router  # noqa: E402
-app.include_router(router)
+app.include_router(router, dependencies=[Depends(verify_session)])
