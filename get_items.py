@@ -1,9 +1,10 @@
+import os
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from models import EbayItemsRequest, EbayItemsResponse, FilterValue, Pagination, PriceBucket, SortSpecRequest, Stats
 
-import mongo
+#import mongo
 from util import _document_to_ebay_item
 
 router = APIRouter()
@@ -134,7 +135,7 @@ def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = 
 
 
 def _compose_sort_specs(sort_specs: Optional[List[SortSpecRequest]]) -> List[tuple[str, int]]:
-    default = [("derived.price", 1)]
+    default = [("derived.price", 1), ("_id", 1)]
     if not sort_specs:
         return default
     mongo_sort_specs = []
@@ -152,7 +153,7 @@ def _compose_sort_specs(sort_specs: Optional[List[SortSpecRequest]]) -> List[tup
         elif field == "returnShippingCostPayer":
             mongo_sort_specs.append(("details.returnTerms.returnShippingCostPayer", direction))
     if mongo_sort_specs:
-        return mongo_sort_specs
+        return mongo_sort_specs + [("_id", 1)]
     else:
         return default
 
@@ -224,7 +225,6 @@ def _items_facet(sort_specs: List[tuple], skip: int, limit: int, price_match: Op
     if price_match:
         steps.append({"$match": price_match})
     sort_dict: Dict[str, int] = dict(sort_specs)
-    sort_dict["_id"] = 1  # stable tiebreaker
     steps.append({"$sort": sort_dict})
     steps.append({"$skip": skip})
     steps.append({"$limit": limit})
@@ -362,23 +362,24 @@ def _parse_available_filters(
 
 
 @router.post("/ebay/items", response_model=EbayItemsResponse)
-async def ebay_items(request: EbayItemsRequest):
+async def ebay_items(request: Request, payload: EbayItemsRequest):
+    db = request.app.state.db
     collection = None
-    if request.name == "MacBookPro":
-        collection = mongo.db["mac_book_pro"]
-    elif request.name == "MacBookAir":
-        collection = mongo.db["mac_book_air"]
+    if payload.name == "MacBookPro":
+        collection = db["mac_book_pro"]
+    elif payload.name == "MacBookAir":
+        collection = db["mac_book_air"]
     if collection is None:
         raise HTTPException(status_code=404, detail="Model collection not found")
 
-    skip = max(request.skip, 0)
-    limit = min(max(request.limit, 1), 100)
+    skip = max(payload.skip, 0)
+    limit = min(max(payload.limit, 1), 100)
     is_first_page = skip == 0
-    mongo_sort_specs = _compose_sort_specs(request.sortSpecs)
+    mongo_sort_specs = _compose_sort_specs(payload.sortSpecs)
 
     # Outer $match: non-price filters + price cap (NEVER includes user price range)
-    match_query = _compose_query(request.filter, exclude_price=True)
-    price_cap = PRICE_CAP.get(request.name)
+    match_query = _compose_query(payload.filter, exclude_price=True)
+    price_cap = PRICE_CAP.get(payload.name)
     if price_cap is not None:
         cap_condition = {"derived.price": {"$lt": price_cap}}
         if match_query:
@@ -387,7 +388,7 @@ async def ebay_items(request: EbayItemsRequest):
             match_query = {"$and": [cap_condition]}
 
     # Price range applied within facet branches only
-    price_match = _build_price_match(request.filter)
+    price_match = _build_price_match(payload.filter)
 
     pipeline = _build_aggregation_pipeline(match_query, mongo_sort_specs, skip, limit, is_first_page, price_match)
     facet_result = (await collection.aggregate(pipeline).to_list(None))[0]
