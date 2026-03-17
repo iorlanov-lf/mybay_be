@@ -500,18 +500,18 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
     is_first_page = skip == 0
     mongo_sort_specs = _compose_sort_specs(payload.sortSpecs)
 
-    # Outer $match: non-price filters + price cap (NEVER includes user price range)
     match_query = _compose_query(payload.filter, exclude_price=True)
-    price_cap = PRICE_CAP.get(payload.name)
-    if price_cap is not None:
-        cap_condition = {"derived.price": {"$lt": price_cap}}
-        if match_query:
-            match_query["$and"].append(cap_condition)
-        else:
-            match_query = {"$and": [cap_condition]}
-
-    # Price range applied within facet branches only
     price_match = _build_price_match(payload.filter)
+
+    # Apply price cap only when no explicit price filter is present
+    if price_match is None:
+        price_cap = PRICE_CAP.get(payload.name)
+        if price_cap is not None:
+            cap_condition = {"derived.price": {"$lt": price_cap}}
+            if match_query:
+                match_query["$and"].append(cap_condition)
+            else:
+                match_query = {"$and": [cap_condition]}
 
     # ── Stats/filter cache lookup (first page only) ──
     cache_col = STATS_CACHE_MAP.get(payload.name) if is_first_page else None
