@@ -685,17 +685,39 @@ def test_first_page_cache_hit_uses_cached_stats(client):
 
 def test_cache_hit_pipeline_is_flat():
     """Cache-hit pipeline has no $facet: $match → $sort → $skip → $limit → $project."""
-    match_query = {"$and": [{"derived.price": {"$lt": 3000}}]}
+    match_query = {"$and": [{"llmSpecs.productLine": {"$in": ["MacBook Pro"]}}, {"derived.price": {"$lt": 3000}}]}
     price_match = {"derived.price": {"$gte": 500, "$lte": 1500}}
-    pipeline = _build_cache_hit_pipeline(match_query, price_match, [("derived.price", 1), ("_id", 1)], 0, 10)
+    pipeline = _build_cache_hit_pipeline(match_query, price_match, 3000, [("derived.price", 1), ("_id", 1)], 0, 10)
     stage_types = [list(s.keys())[0] for s in pipeline]
     assert "$facet" not in stage_types
     assert stage_types == ["$match", "$sort", "$skip", "$limit", "$project"]
-    # Price range merged into $match
-    match_conds = pipeline[0]["$match"]["$and"]
-    assert any("derived.price" in str(c) and "$gte" in str(c) for c in match_conds)
-    # $project is last
+    # Single price condition (user's maxPrice, no separate cap)
+    match_doc = pipeline[0]["$match"]
+    price_conds = [c.get("derived.price") for c in match_doc.get("$and", [match_doc]) if "derived.price" in c]
+    assert len(price_conds) == 1
+    assert price_conds[0] == {"$gte": 500, "$lte": 1500}
     assert "$project" in pipeline[-1]
+
+
+def test_cache_hit_pipeline_uses_cap_when_no_max_price():
+    """When user has no maxPrice, cap is used as upper bound."""
+    match_query = {"$and": [{"derived.price": {"$lt": 3000}}]}
+    # minPrice only, no maxPrice
+    price_match = {"derived.price": {"$gte": 200}}
+    pipeline = _build_cache_hit_pipeline(match_query, price_match, 3000, [("derived.price", 1), ("_id", 1)], 0, 10)
+    match_doc = pipeline[0]["$match"]
+    price_cond = match_doc.get("derived.price") or next(
+        c["derived.price"] for c in match_doc.get("$and", []) if "derived.price" in c
+    )
+    assert price_cond == {"$gte": 200, "$lt": 3000}
+
+
+def test_cache_hit_pipeline_no_price_filter_uses_cap_only():
+    """No user price filter: only the cap condition appears in $match."""
+    match_query = {"$and": [{"derived.price": {"$lt": 3000}}]}
+    pipeline = _build_cache_hit_pipeline(match_query, None, 3000, [("derived.price", 1), ("_id", 1)], 0, 10)
+    match_doc = pipeline[0]["$match"]
+    assert match_doc == {"derived.price": {"$lt": 3000}}
 
 
 def test_second_page_skips_cache_lookup(mock_db, client):

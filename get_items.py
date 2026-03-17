@@ -435,25 +435,42 @@ def _parse_available_filters(
 def _build_cache_hit_pipeline(
     match_query: Optional[Dict[str, Any]],
     price_match: Optional[Dict[str, Any]],
+    price_cap: Optional[int],
     sort_specs: List[tuple],
     skip: int,
     limit: int,
 ) -> List[Dict]:
     """Flat pipeline used when stats/filters come from cache.
 
-    Merges price range into the outer $match so no $facet is needed.
+    Produces exactly one price condition:
+    - user's minPrice / maxPrice when provided
+    - product price cap as the upper bound when no user maxPrice is set
     $project is placed last — it only runs on the final `limit` documents.
     Total count is read from the cache document, not computed here.
     """
     pipeline: List[Dict] = []
 
-    if match_query and price_match:
-        combined: Dict[str, Any] = {"$and": list(match_query["$and"]) + [price_match]}
-        pipeline.append({"$match": combined})
-    elif match_query:
-        pipeline.append({"$match": match_query})
-    elif price_match:
-        pipeline.append({"$match": price_match})
+    # Build single effective price condition
+    user_cond = (price_match or {}).get("derived.price", {})
+    eff_price: Dict[str, Any] = {}
+    if "$gte" in user_cond:
+        eff_price["$gte"] = user_cond["$gte"]
+    if "$lte" in user_cond:
+        eff_price["$lte"] = user_cond["$lte"]       # user maxPrice: inclusive
+    elif price_cap is not None:
+        eff_price["$lt"] = price_cap                # no user maxPrice: use cap
+
+    # Collect non-price clauses from match_query, then append single price clause
+    match_clauses: List[Dict] = []
+    if match_query:
+        match_clauses = [c for c in match_query["$and"] if "derived.price" not in c]
+    if eff_price:
+        match_clauses.append({"derived.price": eff_price})
+
+    if len(match_clauses) > 1:
+        pipeline.append({"$match": {"$and": match_clauses}})
+    elif len(match_clauses) == 1:
+        pipeline.append({"$match": match_clauses[0]})
 
     pipeline.append({"$sort": dict(sort_specs)})
     pipeline.append({"$skip": skip})
@@ -525,7 +542,7 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
         # ── Cache hit: flat pipeline, no $facet, total from cache ──
         await increment_hits(db, cache_col, fhash)
         pipeline = _build_cache_hit_pipeline(
-            match_query, price_match, mongo_sort_specs, skip, limit
+            match_query, price_match, PRICE_CAP.get(payload.name), mongo_sort_specs, skip, limit
         )
         print("Aggregation pipeline (cache hit):", json.dumps(pipeline, indent=2))  # Debug log
         docs = await collection.aggregate(pipeline).to_list(None)
