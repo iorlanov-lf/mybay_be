@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -429,6 +430,38 @@ def _parse_available_filters(
     return result if result else None
 
 
+# ── Cache-hit flat pipeline ──
+
+def _build_cache_hit_pipeline(
+    match_query: Optional[Dict[str, Any]],
+    price_match: Optional[Dict[str, Any]],
+    sort_specs: List[tuple],
+    skip: int,
+    limit: int,
+) -> List[Dict]:
+    """Flat pipeline used when stats/filters come from cache.
+
+    Merges price range into the outer $match so no $facet is needed.
+    $project is placed last — it only runs on the final `limit` documents.
+    Total count is read from the cache document, not computed here.
+    """
+    pipeline: List[Dict] = []
+
+    if match_query and price_match:
+        combined: Dict[str, Any] = {"$and": list(match_query["$and"]) + [price_match]}
+        pipeline.append({"$match": combined})
+    elif match_query:
+        pipeline.append({"$match": match_query})
+    elif price_match:
+        pipeline.append({"$match": price_match})
+
+    pipeline.append({"$sort": dict(sort_specs)})
+    pipeline.append({"$skip": skip})
+    pipeline.append({"$limit": limit})
+    pipeline.append({"$project": _PIPELINE_PROJECTION})
+    return pipeline
+
+
 # ── Cache reconstruction helpers ──
 
 def _stats_from_cache(cache_doc: Dict[str, Any]) -> Optional[Stats]:
@@ -487,32 +520,36 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
     if cache_col:
         fhash = filter_hash(payload.filter)
         cache_doc = await get_valid_cache(db, cache_col, fhash)
-        if cache_doc:
-            await increment_hits(db, cache_col, fhash)
 
-    # Build pipeline: cache hit → items+count only; miss → full pipeline with facets
-    pipeline = _build_aggregation_pipeline(
-        match_query, mongo_sort_specs, skip, limit,
-        is_first_page=is_first_page and cache_doc is None,
-        price_match=price_match,
-    )
-    facet_result = (await collection.aggregate(pipeline).to_list(None))[0]
+    if cache_doc:
+        # ── Cache hit: flat pipeline, no $facet, total from cache ──
+        await increment_hits(db, cache_col, fhash)
+        pipeline = _build_cache_hit_pipeline(
+            match_query, price_match, mongo_sort_specs, skip, limit
+        )
+        print("Aggregation pipeline (cache hit):", json.dumps(pipeline, indent=2))  # Debug log
+        docs = await collection.aggregate(pipeline).to_list(None)
+        items = [_document_to_ebay_item(doc) for doc in docs]
+        total = cache_doc["totalCount"]
+        stats = _stats_from_cache(cache_doc)
+        base_stats = _base_stats_from_cache(cache_doc)
+        available_filters = _filters_from_cache(cache_doc)
+    else:
+        # ── Cache miss or page 2+: $facet pipeline ──
+        pipeline = _build_aggregation_pipeline(
+            match_query, mongo_sort_specs, skip, limit, is_first_page, price_match
+        )
+        print("Aggregation pipeline:", json.dumps(pipeline, indent=2))  # Debug log
+        facet_result = (await collection.aggregate(pipeline).to_list(None))[0]
 
-    total_docs = facet_result.get("totalCount", [])
-    total = total_docs[0]["n"] if total_docs else 0
-    items = [_document_to_ebay_item(doc) for doc in facet_result.get("items", [])]
+        total_docs = facet_result.get("totalCount", [])
+        total = total_docs[0]["n"] if total_docs else 0
+        items = [_document_to_ebay_item(doc) for doc in facet_result.get("items", [])]
 
-    stats = None
-    base_stats = None
-    available_filters = None
-    if is_first_page:
-        if cache_doc:
-            # Cache hit: serve stats/filters from cache
-            stats = _stats_from_cache(cache_doc)
-            base_stats = _base_stats_from_cache(cache_doc)
-            available_filters = _filters_from_cache(cache_doc)
-        else:
-            # Cache miss: compute from pipeline result
+        stats = None
+        base_stats = None
+        available_filters = None
+        if is_first_page:
             filter_keys = (
                 list(LLM_SPEC_FIELD_MAP.keys()) +
                 ANALYSIS_FILTER_FIELDS +
@@ -527,7 +564,6 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
             else:
                 price_bins = _parse_price_bins(facet_result.get("priceBins", []))
                 stats = _parse_stats_from_facet(facet_result.get("stats", []), price_bins)
-            # Store computed result in cache
             if cache_col and fhash is not None:
                 await store_cache(
                     db, cache_col, fhash, payload.filter, payload.name,

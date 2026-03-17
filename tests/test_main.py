@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from main import app
 from get_items import (
     _compose_query, _build_price_match, _build_aggregation_pipeline,
+    _build_cache_hit_pipeline,
     LLM_SPEC_FIELD_MAP, BEST_GUESS_FIELDS, ANALYSIS_FILTER_FIELDS, LLM_FIELDS,
 )
 
@@ -140,7 +141,14 @@ class FakeCollection:
         return FakeAsyncCursor(self._docs)
 
     def aggregate(self, pipeline):
-        facet_stage = next((s["$facet"] for s in pipeline if "$facet" in s), {})
+        facet_stage = next((s["$facet"] for s in pipeline if "$facet" in s), None)
+
+        # Flat pipeline (cache-hit path): no $facet, just skip/limit
+        if facet_stage is None:
+            skip = next((s["$skip"] for s in pipeline if "$skip" in s), 0)
+            limit = next((s["$limit"] for s in pipeline if "$limit" in s), 10)
+            return FakeAsyncCursor(self._docs[skip:skip + limit])
+
         items_pipe = facet_stage.get("items", [])
         skip = next((s["$skip"] for s in items_pipe if "$skip" in s), 0)
         limit = next((s["$limit"] for s in items_pipe if "$limit" in s), 10)
@@ -673,6 +681,21 @@ def test_first_page_cache_hit_uses_cached_stats(client):
     assert data["availableFilters"]["ramSize"][0]["value"] == 16
     # increment_hits was called (update_one with $inc)
     assert any("$inc" in str(call[1]) for call in fake_stats_col._update_one_calls)
+
+
+def test_cache_hit_pipeline_is_flat():
+    """Cache-hit pipeline has no $facet: $match → $sort → $skip → $limit → $project."""
+    match_query = {"$and": [{"derived.price": {"$lt": 3000}}]}
+    price_match = {"derived.price": {"$gte": 500, "$lte": 1500}}
+    pipeline = _build_cache_hit_pipeline(match_query, price_match, [("derived.price", 1), ("_id", 1)], 0, 10)
+    stage_types = [list(s.keys())[0] for s in pipeline]
+    assert "$facet" not in stage_types
+    assert stage_types == ["$match", "$sort", "$skip", "$limit", "$project"]
+    # Price range merged into $match
+    match_conds = pipeline[0]["$match"]["$and"]
+    assert any("derived.price" in str(c) and "$gte" in str(c) for c in match_conds)
+    # $project is last
+    assert "$project" in pipeline[-1]
 
 
 def test_second_page_skips_cache_lookup(mock_db, client):
