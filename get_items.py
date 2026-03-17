@@ -541,7 +541,7 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
         pipeline = _build_cache_hit_pipeline(
             match_query, price_match, PRICE_CAP.get(payload.name), mongo_sort_specs, skip, limit
         )
-        print("Aggregation pipeline (cache hit):", json.dumps(pipeline, indent=2))  # Debug log
+        #print("Aggregation pipeline (cache hit):", json.dumps(pipeline, indent=2))  # Debug log
         docs = await collection.aggregate(pipeline).to_list(None)
         items = [_document_to_ebay_item(doc) for doc in docs]
         total = cache_doc["totalCount"]
@@ -553,7 +553,7 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
         pipeline = _build_aggregation_pipeline(
             match_query, mongo_sort_specs, skip, limit, is_first_page, price_match
         )
-        print("Aggregation pipeline:", json.dumps(pipeline, indent=2))  # Debug log
+        #print("Aggregation pipeline:", json.dumps(pipeline, indent=2))  # Debug log
         facet_result = (await collection.aggregate(pipeline).to_list(None))[0]
 
         total_docs = facet_result.get("totalCount", [])

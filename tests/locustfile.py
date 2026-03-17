@@ -43,12 +43,14 @@ _PAYLOAD_FIRST_PAGE = {
 
 _PAYLOAD_SECOND_PAGE = {
     "name": "MacBookPro",
-    "skip": 10,
+    "skip": 0,
     "limit": 10,
     "filter": {
         "productLine": ["MacBook Pro"],
         "subject": ["L"],
         "ramSize": [16],
+        "cpuFamily": ["i7"],
+        "ssdSize": [512],
         "minPrice": 1,
         "maxPrice": 3000,
     },
