@@ -156,10 +156,12 @@ class FakeCollection:
 
 @pytest.fixture
 def mock_db():
-    """Patch main.db to use FakeCollection with SAMPLE_ITEMS."""
+    """Patch AsyncIOMotorClient so the lifespan injects FakeCollection for all DB access."""
     fake_col = FakeCollection(SAMPLE_ITEMS)
     fake_db = {"mac_book_pro": fake_col}
-    with patch("mongo.db", fake_db):
+    mock_motor_client = MagicMock()
+    mock_motor_client.get_database.return_value = fake_db
+    with patch("main.AsyncIOMotorClient", return_value=mock_motor_client):
         yield fake_db
 
 
@@ -213,7 +215,7 @@ def test_invalid_sort_direction_returns_validation_error():
 # ── Integration tests: Story 2.1 ──
 
 
-def test_ebay_items_page1_has_stats_and_pagination(client, mock_db):
+def test_ebay_items_page1_has_stats_and_pagination(mock_db, client):
     """AC1/AC4: Page 1 returns items, stats, and pagination."""
     response = client.post("/ebay/items", json={"name": "MacBookPro", "limit": 2})
     assert response.status_code == 200
@@ -231,7 +233,7 @@ def test_ebay_items_page1_has_stats_and_pagination(client, mock_db):
     assert len(data["items"]) == 2
 
 
-def test_ebay_items_page2_omits_stats(client, mock_db):
+def test_ebay_items_page2_omits_stats(mock_db, client):
     """AC5: Page 2+ (skip > 0) omits stats and availableFilters."""
     response = client.post("/ebay/items", json={"name": "MacBookPro", "skip": 2, "limit": 2})
     assert response.status_code == 200
@@ -243,7 +245,7 @@ def test_ebay_items_page2_omits_stats(client, mock_db):
     assert len(data["items"]) == 2
 
 
-def test_ebay_items_page1_has_price_buckets(client, mock_db):
+def test_ebay_items_page1_has_price_buckets(mock_db, client):
     """AC2: Page 1 stats include priceBuckets."""
     response = client.post("/ebay/items", json={"name": "MacBookPro"})
     data = response.json()
@@ -255,7 +257,7 @@ def test_ebay_items_page1_has_price_buckets(client, mock_db):
         assert "count" in bucket
 
 
-def test_ebay_items_page1_has_available_filters(client, mock_db):
+def test_ebay_items_page1_has_available_filters(mock_db, client):
     """Page 1 returns availableFilters with value counts sourced from llmSpecs."""
     response = client.post("/ebay/items", json={"name": "MacBookPro"})
     data = response.json()
@@ -348,6 +350,24 @@ def test_build_price_match_without_price_filter():
     assert _build_price_match({"ramSize": [16]}) is None
 
 
+def test_build_aggregation_pipeline_has_project_before_facet():
+    """$project stage is always present and immediately precedes $facet."""
+    for match_query in [None, {"$and": [{"derived.price": {"$lt": 3000}}]}]:
+        pipeline = _build_aggregation_pipeline(
+            match_query=match_query, sort_specs=[("derived.price", 1)],
+            skip=0, limit=10, is_first_page=True, price_match=None,
+        )
+        stage_types = [list(s.keys())[0] for s in pipeline]
+        assert "$project" in stage_types
+        project_idx = stage_types.index("$project")
+        facet_idx = stage_types.index("$facet")
+        assert facet_idx == project_idx + 1, "$project must immediately precede $facet"
+        project_fields = pipeline[project_idx]["$project"]
+        for field in ("itemId", "details.title", "details.condition", "derived.price",
+                      "llmSpecs.ramSize", "llmAnalysis.specsCompleteness", "llmDerived.screen"):
+            assert field in project_fields, f"{field} missing from $project"
+
+
 def test_build_aggregation_pipeline_page1_has_all_facets():
     """Page 1 pipeline includes stats, priceBins, and filter value facets."""
     pipeline = _build_aggregation_pipeline(
@@ -405,8 +425,8 @@ def test_search_templates_returns_matching_docs(client):
     fake_cursor.to_list = AsyncMock(return_value=[dict(d, _id="fake") for d in fake_docs])
     fake_col.find.return_value = fake_cursor
     fake_db = {"search_templates": fake_col, "mac_book_pro": FakeCollection(SAMPLE_ITEMS)}
-    with patch("mongo.db", fake_db):
-        response = client.get("/ebay/search-templates", params={"productName": "MacBook Pro"})
+    app.state.db = fake_db
+    response = client.get("/ebay/search-templates", params={"productName": "MacBook Pro"})
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
@@ -430,8 +450,8 @@ def test_ebay_items_macbook_air_routes_to_air_collection(client):
         "mac_book_pro": FakeCollection([]),
         "mac_book_air": FakeCollection(air_items),
     }
-    with patch("mongo.db", fake_db):
-        response = client.post("/ebay/items", json={"name": "MacBookAir", "limit": 10})
+    app.state.db = fake_db
+    response = client.post("/ebay/items", json={"name": "MacBookAir", "limit": 10})
     assert response.status_code == 200
     data = response.json()
     assert len(data["items"]) == 2
@@ -444,8 +464,8 @@ def test_ebay_items_by_ids_macbook_air_routes_to_air_collection(client):
         "mac_book_pro": FakeCollection([]),
         "mac_book_air": FakeCollection(SAMPLE_ITEMS[:1]),
     }
-    with patch("mongo.db", fake_db):
-        response = client.post("/ebay/items/by-ids", json={"name": "MacBookAir", "itemIds": [item_id]})
+    app.state.db = fake_db
+    response = client.post("/ebay/items/by-ids", json={"name": "MacBookAir", "itemIds": [item_id]})
     assert response.status_code == 200
     data = response.json()
     assert len(data["items"]) == 1
@@ -497,7 +517,7 @@ def test_verify_turnstile_failure():
     assert response.status_code == 403
 
 
-def test_ebay_items_no_token_dev_mode(client, mock_db):
+def test_ebay_items_no_token_dev_mode(mock_db, client):
     """Without TURNSTILE_SECRET_KEY, /ebay/items passes through (no auth required)."""
     response = client.post("/ebay/items", json={"name": "MacBookPro"})
     assert response.status_code == 200

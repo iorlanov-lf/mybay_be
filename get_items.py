@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -62,6 +63,68 @@ PRICE_CAP = {
 
 # Fixed $100 bucket boundaries for price histograms (0, 100, ..., 3000)
 PRICE_BUCKET_BOUNDARIES = list(range(0, 3100, 100))
+
+# Projection applied after $match and before $facet.
+# Only fields consumed by $facet branches (facets, stats, sort) or the frontend
+# (EbayItem model) are included. Fields marked "sort only" or "facet only" are
+# not in the model but must be in the pipeline for MongoDB to use them.
+_PIPELINE_PROJECTION: Dict[str, int] = {
+    "_id": 1,
+    "itemId": 1,
+    # details — UI fields only (excludes full eBay API payload)
+    "details.title": 1,
+    "details.condition": 1,
+    "details.image.imageUrl": 1,
+    "details.itemWebUrl": 1,
+    "details.returnTerms.returnsAccepted": 1,
+    "details.returnTerms.returnShippingCostPayer": 1,
+    "details.returnTerms.returnPeriod": 1,
+    # derived — price: UI + stats/filter; conditionRank: sort only
+    "derived.price": 1,
+    "derived.conditionRank": 1,
+    # llmSpecs — releaseYear..partNumber: UI; productLine: facet only
+    "llmSpecs.productLine": 1,
+    "llmSpecs.releaseYear": 1,
+    "llmSpecs.cpuFamily": 1,
+    "llmSpecs.cpuModel": 1,
+    "llmSpecs.cpuSpeed": 1,
+    "llmSpecs.ramSize": 1,
+    "llmSpecs.ssdSize": 1,
+    "llmSpecs.screenSize": 1,
+    "llmSpecs.color": 1,
+    "llmSpecs.modelNumber": 1,
+    "llmSpecs.modelId": 1,
+    "llmSpecs.partNumber": 1,
+    # llmAnalysis — issue/completeness: UI; rank fields: sort only
+    "llmAnalysis.specsAnalysis": 1,
+    "llmAnalysis.mainSpecsIssueSeverity": 1,
+    "llmAnalysis.mainSpecsIssueDescription": 1,
+    "llmAnalysis.specsCompleteness": 1,
+    "llmAnalysis.specsConsistency": 1,
+    "llmAnalysis.specsCompletenessRank": 1,
+    "llmAnalysis.specsConsistencyRank": 1,
+    # llmDerived — grade fields: UI; componentListing+subject: facets only;
+    #              *Rank fields: sort only
+    "llmDerived.charger": 1,
+    "llmDerived.battery": 1,
+    "llmDerived.screen": 1,
+    "llmDerived.keyboard": 1,
+    "llmDerived.housing": 1,
+    "llmDerived.audio": 1,
+    "llmDerived.ports": 1,
+    "llmDerived.functionality": 1,
+    "llmDerived.componentListing": 1,
+    "llmDerived.subject": 1,
+    "llmDerived.chargerRank": 1,
+    "llmDerived.batteryRank": 1,
+    "llmDerived.screenRank": 1,
+    "llmDerived.keyboardRank": 1,
+    "llmDerived.housingRank": 1,
+    "llmDerived.audioRank": 1,
+    "llmDerived.portsRank": 1,
+    "llmDerived.functionalityRank": 1,
+    "llmDerived.subjectRank": 1,
+}
 
 
 def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = False) -> Optional[Dict[str, Any]]:
@@ -300,6 +363,7 @@ def _build_aggregation_pipeline(
     pipeline: List[Dict] = []
     if match_query:
         pipeline.append({"$match": match_query})
+    pipeline.append({"$project": _PIPELINE_PROJECTION})
     facet: Dict[str, List[Dict]] = {}
     facet["totalCount"] = _count_facet(price_match)
     facet["items"] = _items_facet(sort_specs, skip, limit, price_match)
@@ -391,6 +455,7 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
     price_match = _build_price_match(payload.filter)
 
     pipeline = _build_aggregation_pipeline(match_query, mongo_sort_specs, skip, limit, is_first_page, price_match)
+    print("Aggregation pipeline:", json.dumps(pipeline, indent=2))  # Debug log for pipeline
     facet_result = (await collection.aggregate(pipeline).to_list(None))[0]
 
     total_docs = facet_result.get("totalCount", [])

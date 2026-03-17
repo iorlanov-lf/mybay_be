@@ -39,11 +39,9 @@ class Price(BaseModel):
 
 
 class ImageAsset(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     imageUrl: Optional[str] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
 
 
 class ReturnPeriod(BaseModel):
@@ -52,10 +50,9 @@ class ReturnPeriod(BaseModel):
 
 
 class ReturnTerms(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     returnsAccepted: Optional[bool] = None
-    refundMethod: Optional[str] = None
     returnShippingCostPayer: Optional[str] = None
     returnPeriod: Optional[ReturnPeriod] = None
 
@@ -65,10 +62,6 @@ class ItemDetails(BaseModel):
 
     title: Optional[str] = None
     condition: Optional[str] = None
-    conditionDescription: Optional[str] = None
-    shortDescription: Optional[str] = None
-    description: Optional[str] = None
-    price: Optional[Price] = None
     returnTerms: Optional[ReturnTerms] = None
     image: Optional[ImageAsset] = None
     itemWebUrl: Optional[str] = None
@@ -103,16 +96,11 @@ class DerivedData(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     price: Optional[float] = None
-    conditionRank: Optional[int] = None
 
 
 class LlmSpecs(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    productLine: Optional[List[str]] = None
-    modelNumber: Optional[List[str]] = None
-    modelId: Optional[List[str]] = None
-    partNumber: Optional[List[str]] = None
     releaseYear: Optional[List[str]] = None
     cpuFamily: Optional[List[str]] = None
     cpuModel: Optional[List[str]] = None
@@ -121,7 +109,9 @@ class LlmSpecs(BaseModel):
     ssdSize: Optional[List[int]] = None
     screenSize: Optional[List[float]] = None
     color: Optional[List[str]] = None
-    inferred: Optional[List[str]] = None
+    modelNumber: Optional[List[str]] = None
+    modelId: Optional[List[str]] = None
+    partNumber: Optional[List[str]] = None
 
 
 class SpecAnalysisEntry(BaseModel):
@@ -155,14 +145,8 @@ class LlmAnalysisData(BaseModel):
     specsAnalysis: Optional[Dict[str, SpecAnalysisEntry]] = None
     mainSpecsIssueSeverity: Optional[str] = None
     mainSpecsIssueDescription: Optional[List[str]] = None
-    variantAnalysis: Optional[str] = None
-    variants: Optional[List[VariantMatch]] = None
-    missing: Optional[List[str]] = None
-    minDistance: Optional[float] = None
     specsCompleteness: Optional[str] = None
     specsConsistency: Optional[str] = None
-    specsCompletenessRank: Optional[int] = None
-    specsConsistencyRank: Optional[int] = None
 
 
 class LlmDerived(BaseModel):
@@ -176,9 +160,6 @@ class LlmDerived(BaseModel):
     audio: Optional[str] = None
     ports: Optional[str] = None
     functionality: Optional[str] = None
-    componentListing: Optional[str] = None
-    subject: Optional[str] = None
-    return_: Optional[str] = Field(default=None, alias="return")
 
 
 class EbayItem(BaseModel):
@@ -186,9 +167,6 @@ class EbayItem(BaseModel):
 
     itemId: str
     details: ItemDetails
-    insertedAt: Optional[datetime] = None
-    updatedAt: Optional[datetime] = None
-    processedAt: Optional[datetime] = None
     derived: Optional[DerivedData] = None
     llmSpecs: Optional[LlmSpecs] = None
     llmAnalysis: Optional[LlmAnalysisData] = None
