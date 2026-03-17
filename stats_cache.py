@@ -4,10 +4,18 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
+def _normalize_filter(filter_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Strip keys with None or empty-list values — they carry no filtering intent."""
+    if not filter_data:
+        return {}
+    return {k: v for k, v in filter_data.items() if v is not None and v != []}
+
+
 def filter_hash(filter_data: Optional[Dict[str, Any]]) -> str:
-    """SHA256 of stable JSON serialization of the filter dict."""
+    """SHA256 of stable JSON serialization of the normalized filter dict."""
+    normalized = _normalize_filter(filter_data)
     return hashlib.sha256(
-        json.dumps(filter_data or {}, sort_keys=True, ensure_ascii=True).encode()
+        json.dumps(normalized, sort_keys=True, ensure_ascii=True).encode()
     ).hexdigest()
 
 
@@ -32,7 +40,7 @@ async def store_cache(
         {"_id": fhash},
         {
             "$set": {
-                "filter": filter_data or {},
+                "filter": _normalize_filter(filter_data),
                 "productName": product_name,
                 "valid": True,
                 "cachedAt": datetime.now(timezone.utc),
