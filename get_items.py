@@ -1,14 +1,18 @@
-import json
 import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from models import EbayItemsRequest, EbayItemsResponse, FilterValue, Pagination, PriceBucket, SortSpecRequest, Stats
+from stats_cache import filter_hash, get_valid_cache, store_cache, increment_hits
 
-#import mongo
 from util import _document_to_ebay_item
 
 router = APIRouter()
+
+STATS_CACHE_MAP: Dict[str, str] = {
+    "MacBookPro": "mac_book_pro_stats",
+    "MacBookAir": "mac_book_air_stats",
+}
 
 # ── Shared field lists ──
 # LLM spec filter key → MongoDB llmSpecs path
@@ -425,6 +429,28 @@ def _parse_available_filters(
     return result if result else None
 
 
+# ── Cache reconstruction helpers ──
+
+def _stats_from_cache(cache_doc: Dict[str, Any]) -> Optional[Stats]:
+    raw = cache_doc.get("stats")
+    return Stats.model_validate(raw) if raw else None
+
+
+def _base_stats_from_cache(cache_doc: Dict[str, Any]) -> Optional[Stats]:
+    raw = cache_doc.get("baseStats")
+    return Stats.model_validate(raw) if raw else None
+
+
+def _filters_from_cache(cache_doc: Dict[str, Any]) -> Optional[Dict[str, List[FilterValue]]]:
+    raw = cache_doc.get("availableFilters")
+    if not raw:
+        return None
+    return {
+        k: [FilterValue.model_validate(fv) for fv in vs]
+        for k, vs in raw.items()
+    }
+
+
 @router.post("/ebay/items", response_model=EbayItemsResponse)
 async def ebay_items(request: Request, payload: EbayItemsRequest):
     db = request.app.state.db
@@ -454,8 +480,22 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
     # Price range applied within facet branches only
     price_match = _build_price_match(payload.filter)
 
-    pipeline = _build_aggregation_pipeline(match_query, mongo_sort_specs, skip, limit, is_first_page, price_match)
-    print("Aggregation pipeline:", json.dumps(pipeline, indent=2))  # Debug log for pipeline
+    # ── Stats/filter cache lookup (first page only) ──
+    cache_col = STATS_CACHE_MAP.get(payload.name) if is_first_page else None
+    fhash = None
+    cache_doc = None
+    if cache_col:
+        fhash = filter_hash(payload.filter)
+        cache_doc = await get_valid_cache(db, cache_col, fhash)
+        if cache_doc:
+            await increment_hits(db, cache_col, fhash)
+
+    # Build pipeline: cache hit → items+count only; miss → full pipeline with facets
+    pipeline = _build_aggregation_pipeline(
+        match_query, mongo_sort_specs, skip, limit,
+        is_first_page=is_first_page and cache_doc is None,
+        price_match=price_match,
+    )
     facet_result = (await collection.aggregate(pipeline).to_list(None))[0]
 
     total_docs = facet_result.get("totalCount", [])
@@ -466,20 +506,33 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
     base_stats = None
     available_filters = None
     if is_first_page:
-        filter_keys = (
-            list(LLM_SPEC_FIELD_MAP.keys()) +
-            ANALYSIS_FILTER_FIELDS +
-            LLM_FIELDS +
-            ["returnable", "returnShippingCostPayer", "condition"]
-        )
-        available_filters = _parse_available_filters(facet_result, filter_keys)
-        if price_match:
-            base_price_bins = _parse_price_bins(facet_result.get("basePriceBins", []))
-            stats = _parse_stats_from_facet(facet_result.get("stats", []), base_price_bins)
-            base_stats = _parse_stats_from_facet(facet_result.get("baseStats", []))
+        if cache_doc:
+            # Cache hit: serve stats/filters from cache
+            stats = _stats_from_cache(cache_doc)
+            base_stats = _base_stats_from_cache(cache_doc)
+            available_filters = _filters_from_cache(cache_doc)
         else:
-            price_bins = _parse_price_bins(facet_result.get("priceBins", []))
-            stats = _parse_stats_from_facet(facet_result.get("stats", []), price_bins)
+            # Cache miss: compute from pipeline result
+            filter_keys = (
+                list(LLM_SPEC_FIELD_MAP.keys()) +
+                ANALYSIS_FILTER_FIELDS +
+                LLM_FIELDS +
+                ["returnable", "returnShippingCostPayer", "condition"]
+            )
+            available_filters = _parse_available_filters(facet_result, filter_keys)
+            if price_match:
+                base_price_bins = _parse_price_bins(facet_result.get("basePriceBins", []))
+                stats = _parse_stats_from_facet(facet_result.get("stats", []), base_price_bins)
+                base_stats = _parse_stats_from_facet(facet_result.get("baseStats", []))
+            else:
+                price_bins = _parse_price_bins(facet_result.get("priceBins", []))
+                stats = _parse_stats_from_facet(facet_result.get("stats", []), price_bins)
+            # Store computed result in cache
+            if cache_col and fhash is not None:
+                await store_cache(
+                    db, cache_col, fhash, payload.filter, payload.name,
+                    total, stats, base_stats, available_filters,
+                )
 
     return EbayItemsResponse(
         items=items,

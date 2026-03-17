@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from main import app
 from get_items import (
     _compose_query, _build_price_match, _build_aggregation_pipeline,
@@ -101,6 +101,35 @@ def _fake_filter_value_facet(docs: List[Dict[str, Any]], key: str) -> List[Dict[
     return [{"_id": k, "count": v} for k, v in sorted(counts.items(), key=lambda x: (isinstance(x[0], str), x[0]))]
 
 
+class FakeStatsCollection:
+    """Fake stats cache collection for testing."""
+
+    def __init__(self):
+        self._cached_doc: Optional[Dict[str, Any]] = None
+        self._find_one_calls: int = 0
+        self._update_one_calls: list = []
+
+    async def find_one(self, query):
+        self._find_one_calls += 1
+        if self._cached_doc is not None and query.get("valid") is True:
+            return self._cached_doc
+        return None
+
+    async def update_one(self, filter_, update, upsert=False):
+        self._update_one_calls.append((filter_, update))
+
+
+class FakeDB(dict):
+    """Dict-like fake database that auto-creates FakeStatsCollection for _stats keys."""
+
+    def __missing__(self, key):
+        if key.endswith("_stats"):
+            col = FakeStatsCollection()
+            self[key] = col
+            return col
+        raise KeyError(key)
+
+
 class FakeCollection:
     """In-memory MongoDB collection fake for integration tests."""
 
@@ -158,7 +187,7 @@ class FakeCollection:
 def mock_db():
     """Patch AsyncIOMotorClient so the lifespan injects FakeCollection for all DB access."""
     fake_col = FakeCollection(SAMPLE_ITEMS)
-    fake_db = {"mac_book_pro": fake_col}
+    fake_db = FakeDB({"mac_book_pro": fake_col})
     mock_motor_client = MagicMock()
     mock_motor_client.get_database.return_value = fake_db
     with patch("main.AsyncIOMotorClient", return_value=mock_motor_client):
@@ -446,10 +475,10 @@ def test_search_templates_missing_param_returns_422(client):
 def test_ebay_items_macbook_air_routes_to_air_collection(client):
     """POST /ebay/items with name=MacBookAir uses mac_book_air collection."""
     air_items = SAMPLE_ITEMS[:2]
-    fake_db = {
+    fake_db = FakeDB({
         "mac_book_pro": FakeCollection([]),
         "mac_book_air": FakeCollection(air_items),
-    }
+    })
     app.state.db = fake_db
     response = client.post("/ebay/items", json={"name": "MacBookAir", "limit": 10})
     assert response.status_code == 200
@@ -585,3 +614,70 @@ def test_ebay_items_api_key_bypass(mock_db):
                     headers={"X-Api-Key": bypass_key},
                 )
     assert response.status_code == 200
+
+
+# ── Cache tests: Story 6.5 ──
+
+
+def test_first_page_cache_miss_stores_cache(mock_db, client):
+    """First page with no valid cache: full pipeline runs, result stored in cache."""
+    stats_col = mock_db["mac_book_pro_stats"]  # trigger FakeDB creation
+
+    response = client.post("/ebay/items", json={"name": "MacBookPro"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["stats"] is not None
+    assert data["availableFilters"] is not None
+    # store_cache called update_one with $set + $setOnInsert
+    assert len(stats_col._update_one_calls) == 1
+    _, update = stats_col._update_one_calls[0]
+    assert "$set" in update
+    assert update["$set"]["valid"] is True
+    assert update["$set"]["productName"] == "MacBookPro"
+
+
+def test_first_page_cache_hit_uses_cached_stats(client):
+    """First page with valid cache: cached stats/filters returned without running full pipeline."""
+    cached_doc = {
+        "_id": "deadbeef",
+        "filter": {},
+        "productName": "MacBookPro",
+        "valid": True,
+        "hits": 5,
+        "totalCount": 99,
+        "stats": {
+            "min": 111.0, "max": 999.0, "median": 500.0, "mean": 500.0,
+            "count": 3, "priceBuckets": None,
+        },
+        "baseStats": None,
+        "availableFilters": {"ramSize": [{"value": 16, "count": 3}]},
+    }
+    fake_stats_col = FakeStatsCollection()
+    fake_stats_col._cached_doc = cached_doc
+    fake_db = FakeDB({
+        "mac_book_pro": FakeCollection(SAMPLE_ITEMS),
+        "mac_book_pro_stats": fake_stats_col,
+    })
+    app.state.db = fake_db
+
+    response = client.post("/ebay/items", json={"name": "MacBookPro"})
+
+    assert response.status_code == 200
+    data = response.json()
+    # Stats served from cache
+    assert data["stats"]["min"] == 111.0
+    assert data["stats"]["max"] == 999.0
+    assert data["stats"]["count"] == 3
+    assert "ramSize" in data["availableFilters"]
+    assert data["availableFilters"]["ramSize"][0]["value"] == 16
+    # increment_hits was called (update_one with $inc)
+    assert any("$inc" in str(call[1]) for call in fake_stats_col._update_one_calls)
+
+
+def test_second_page_skips_cache_lookup(mock_db, client):
+    """Page 2+ does not look up the stats cache."""
+    with patch("get_items.get_valid_cache", new_callable=AsyncMock) as mock_cache:
+        response = client.post("/ebay/items", json={"name": "MacBookPro", "skip": 10})
+    assert response.status_code == 200
+    mock_cache.assert_not_called()
