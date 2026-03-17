@@ -720,9 +720,33 @@ def test_cache_hit_pipeline_no_price_filter_uses_cap_only():
     assert match_doc == {"derived.price": {"$lt": 3000}}
 
 
-def test_second_page_skips_cache_lookup(mock_db, client):
-    """Page 2+ does not look up the stats cache."""
-    with patch("get_items.get_valid_cache", new_callable=AsyncMock) as mock_cache:
-        response = client.post("/ebay/items", json={"name": "MacBookPro", "skip": 10})
+def test_second_page_cache_hit_uses_flat_pipeline(client):
+    """Page 2+ with valid cache: flat pipeline used, no stats or filters returned."""
+    cached_doc = {
+        "_id": "deadbeef",
+        "filter": {},
+        "productName": "MacBookPro",
+        "valid": True,
+        "hits": 3,
+        "totalCount": 99,
+        "stats": {"min": 111.0, "max": 999.0, "median": 500.0, "mean": 500.0, "count": 3, "priceBuckets": None},
+        "baseStats": None,
+        "availableFilters": {"ramSize": [{"value": 16, "count": 3}]},
+    }
+    fake_stats_col = FakeStatsCollection()
+    fake_stats_col._cached_doc = cached_doc
+    fake_db = FakeDB({
+        "mac_book_pro": FakeCollection(SAMPLE_ITEMS),
+        "mac_book_pro_stats": fake_stats_col,
+    })
+    app.state.db = fake_db
+
+    response = client.post("/ebay/items", json={"name": "MacBookPro", "skip": 10, "limit": 5})
+
     assert response.status_code == 200
-    mock_cache.assert_not_called()
+    data = response.json()
+    assert data["stats"] is None
+    assert data["availableFilters"] is None
+    assert data["pagination"]["total"] == 99  # from cache
+    assert data["pagination"]["skip"] == 10
+    assert fake_stats_col._find_one_calls == 1  # cache was looked up

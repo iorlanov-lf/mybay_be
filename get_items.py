@@ -530,13 +530,10 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
             else:
                 match_query = {"$and": [cap_condition]}
 
-    # ── Stats/filter cache lookup (first page only) ──
-    cache_col = STATS_CACHE_MAP.get(payload.name) if is_first_page else None
-    fhash = None
-    cache_doc = None
-    if cache_col:
-        fhash = filter_hash(payload.filter)
-        cache_doc = await get_valid_cache(db, cache_col, fhash)
+    # ── Stats/filter cache lookup (all pages) ──
+    cache_col = STATS_CACHE_MAP.get(payload.name)
+    fhash = filter_hash(payload.filter)
+    cache_doc = await get_valid_cache(db, cache_col, fhash)
 
     if cache_doc:
         # ── Cache hit: flat pipeline, no $facet, total from cache ──
@@ -548,9 +545,9 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
         docs = await collection.aggregate(pipeline).to_list(None)
         items = [_document_to_ebay_item(doc) for doc in docs]
         total = cache_doc["totalCount"]
-        stats = _stats_from_cache(cache_doc)
-        base_stats = _base_stats_from_cache(cache_doc)
-        available_filters = _filters_from_cache(cache_doc)
+        stats = _stats_from_cache(cache_doc) if is_first_page else None
+        base_stats = _base_stats_from_cache(cache_doc) if is_first_page else None
+        available_filters = _filters_from_cache(cache_doc) if is_first_page else None
     else:
         # ── Cache miss or page 2+: $facet pipeline ──
         pipeline = _build_aggregation_pipeline(
