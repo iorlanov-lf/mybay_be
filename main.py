@@ -10,6 +10,7 @@ from models import EbayItemsByIdsRequest, EbayItemsByIdsResponse, ErrorDetail, E
 
 #import mongo
 from auth import router as auth_router, verify_session
+from get_items import _build_epn_url
 from util import _document_to_ebay_item
 
 @asynccontextmanager
@@ -123,6 +124,15 @@ async def ebay_items_by_ids(request: Request, payload: EbayItemsByIdsRequest, _:
 
     docs = await collection.find({"itemId": {"$in": payload.itemIds}}).to_list(None)
     items = [_document_to_ebay_item(doc) for doc in docs]
+
+    campaign_doc = await db["campaigns"].find_one({"name": payload.name})
+    raw_id = campaign_doc.get("campaignId") if campaign_doc else None
+    campaign_id = str(raw_id) if raw_id is not None else None
+    if campaign_id:
+        for item in items:
+            if item.details and item.details.itemWebUrl:
+                item.details.itemWebUrl = _build_epn_url(item.details.itemWebUrl, campaign_id)
+
     return EbayItemsByIdsResponse(items=items)
 
 

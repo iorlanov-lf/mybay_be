@@ -60,6 +60,16 @@ BEST_GUESS_FIELDS = [
     "releaseYear", "cpuFamily", "screenSize", "ramSize", "ssdSize",
 ]
 
+# EPN affiliate URL parameters (appended to itemWebUrl)
+_EPN_PARAMS = "mkcid=1&mkrid=711-53200-19255-0&siteid=0&campid={campaign_id}&customid=&toolid=10001&mkevt=1"
+
+
+def _build_epn_url(original_url: str, campaign_id: str) -> str:
+    """Return original_url with EPN affiliate query parameters appended."""
+    separator = "&" if "?" in original_url else "?"
+    return original_url + separator + _EPN_PARAMS.format(campaign_id=campaign_id)
+
+
 # Hard price cap per product — items above this price are excluded from all results
 PRICE_CAP = {
     "MacBookPro": 3000,
@@ -583,6 +593,16 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
                     db, cache_col, fhash, payload.filter, payload.name,
                     total, stats, base_stats, available_filters,
                 )
+
+    # Look up EPN campaign ID only when items exist (graceful degradation if not found)
+    campaign_doc = await db["campaigns"].find_one({"name": payload.name})
+    raw_id = campaign_doc.get("campaignId") if campaign_doc else None
+    campaign_id: Optional[str] = str(raw_id) if raw_id is not None else None
+
+    if campaign_id:
+        for item in items:
+            if item.details and item.details.itemWebUrl:
+                item.details.itemWebUrl = _build_epn_url(item.details.itemWebUrl, campaign_id)
 
     return EbayItemsResponse(
         items=items,

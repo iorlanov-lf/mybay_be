@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from main import app
 from get_items import (
     _compose_query, _build_price_match, _build_aggregation_pipeline,
-    _build_cache_hit_pipeline,
+    _build_cache_hit_pipeline, _build_epn_url,
     LLM_SPEC_FIELD_MAP, BEST_GUESS_FIELDS, ANALYSIS_FILTER_FIELDS, LLM_FIELDS,
 )
 
@@ -120,12 +120,29 @@ class FakeStatsCollection:
         self._update_one_calls.append((filter_, update))
 
 
+class FakeCampaignsCollection:
+    """Fake campaigns collection for testing. Returns None by default (no campaign found)."""
+
+    def __init__(self, campaign_doc: Optional[Dict[str, Any]] = None):
+        self._campaign_doc = campaign_doc
+
+    async def find_one(self, query):
+        if self._campaign_doc and self._campaign_doc.get("name") == query.get("name"):
+            return self._campaign_doc
+        return None
+
+
 class FakeDB(dict):
-    """Dict-like fake database that auto-creates FakeStatsCollection for _stats keys."""
+    """Dict-like fake database that auto-creates FakeStatsCollection for _stats keys
+    and a no-campaign FakeCampaignsCollection for the campaigns key."""
 
     def __missing__(self, key):
         if key.endswith("_stats"):
             col = FakeStatsCollection()
+            self[key] = col
+            return col
+        if key == "campaigns":
+            col = FakeCampaignsCollection()
             self[key] = col
             return col
         raise KeyError(key)
@@ -497,10 +514,10 @@ def test_ebay_items_macbook_air_routes_to_air_collection(client):
 def test_ebay_items_by_ids_macbook_air_routes_to_air_collection(client):
     """POST /ebay/items/by-ids with name=MacBookAir uses mac_book_air collection."""
     item_id = SAMPLE_ITEMS[0]["itemId"]
-    fake_db = {
+    fake_db = FakeDB({
         "mac_book_pro": FakeCollection([]),
         "mac_book_air": FakeCollection(SAMPLE_ITEMS[:1]),
-    }
+    })
     app.state.db = fake_db
     response = client.post("/ebay/items/by-ids", json={"name": "MacBookAir", "itemIds": [item_id]})
     assert response.status_code == 200
@@ -750,3 +767,221 @@ def test_second_page_cache_hit_uses_flat_pipeline(client):
     assert data["pagination"]["total"] == 99  # from cache
     assert data["pagination"]["skip"] == 10
     assert fake_stats_col._find_one_calls == 1  # cache was looked up
+
+
+# ── Unit tests: Story 8.1 — EPN URL helper ──
+
+
+def test_build_epn_url_no_existing_query_string():
+    """URL with no query string gets '?' separator before EPN params."""
+    result = _build_epn_url("https://www.ebay.com/itm/123456789", "12345678")
+    assert result.startswith("https://www.ebay.com/itm/123456789?")
+    assert "mkcid=1" in result
+    assert "mkrid=711-53200-19255-0" in result
+    assert "siteid=0" in result
+    assert "campid=12345678" in result
+    assert "customid=" in result
+    assert "toolid=10001" in result
+    assert "mkevt=1" in result
+
+
+def test_build_epn_url_with_existing_query_string():
+    """URL that already has a query string gets '&' separator before EPN params."""
+    result = _build_epn_url("https://www.ebay.com/itm/123456789?var=abc", "12345678")
+    assert "https://www.ebay.com/itm/123456789?var=abc&" in result
+    assert "campid=12345678" in result
+    assert result.count("?") == 1  # only one '?' in the URL
+
+
+def test_build_epn_url_embeds_campaign_id():
+    """campaignId is correctly embedded in the composed URL."""
+    result = _build_epn_url("https://www.ebay.com/itm/1", "MYCAMPID")
+    assert "campid=MYCAMPID" in result
+    result2 = _build_epn_url("https://www.ebay.com/itm/2", "OTHERID")
+    assert "campid=OTHERID" in result2
+
+
+# ── Integration tests: Story 8.1 — EPN URL transformation ──
+
+
+def _make_item_with_url(item_id, price, item_web_url):
+    """Build a minimal MongoDB doc that includes itemWebUrl in details."""
+    return {
+        "itemId": item_id,
+        "details": {"title": f"MacBook {item_id}", "condition": "Used", "itemWebUrl": item_web_url},
+        "derived": {"price": price},
+        "llmSpecs": {
+            "productLine": ["MacBook Pro 15\" 2019"],
+            "releaseYear": ["2019"],
+            "screenSize": [15.4],
+            "ramSize": [16],
+            "ssdSize": [256],
+        },
+        "llmDerived": {"screen": "Good", "subject": "L"},
+    }
+
+
+def test_epn_url_transformed_when_campaign_found(client):
+    """AC1+AC2: When a campaign doc exists, itemWebUrl is transformed to EPN affiliate URL."""
+    original_url = "https://www.ebay.com/itm/987654321"
+    items = [_make_item_with_url("item1", 500.0, original_url)]
+    fake_db = FakeDB({
+        "mac_book_pro": FakeCollection(items),
+        "campaigns": FakeCampaignsCollection({"name": "MacBookPro", "campaignId": "CAMP99"}),
+    })
+    app.state.db = fake_db
+
+    response = client.post("/ebay/items", json={"name": "MacBookPro"})
+
+    assert response.status_code == 200
+    item_url = response.json()["items"][0]["details"]["itemWebUrl"]
+    assert item_url.startswith(original_url)
+    assert "campid=CAMP99" in item_url
+    assert "mkcid=1" in item_url
+    assert "mkevt=1" in item_url
+
+
+def test_epn_url_unchanged_when_campaign_not_found(client):
+    """AC1: When no campaign doc exists, itemWebUrl is returned unchanged."""
+    original_url = "https://www.ebay.com/itm/111222333"
+    items = [_make_item_with_url("item1", 500.0, original_url)]
+    fake_db = FakeDB({
+        "mac_book_pro": FakeCollection(items),
+        # FakeDB.__missing__ creates a no-campaign FakeCampaignsCollection automatically
+    })
+    app.state.db = fake_db
+
+    response = client.post("/ebay/items", json={"name": "MacBookPro"})
+
+    assert response.status_code == 200
+    item_url = response.json()["items"][0]["details"]["itemWebUrl"]
+    assert item_url == original_url
+
+
+def test_epn_url_unchanged_when_campaign_has_no_campaign_id(client):
+    """AC1: Campaign doc exists but has no campaignId → itemWebUrl unchanged."""
+    original_url = "https://www.ebay.com/itm/555666777"
+    items = [_make_item_with_url("item1", 500.0, original_url)]
+    fake_db = FakeDB({
+        "mac_book_pro": FakeCollection(items),
+        "campaigns": FakeCampaignsCollection({"name": "MacBookPro"}),  # no campaignId field
+    })
+    app.state.db = fake_db
+
+    response = client.post("/ebay/items", json={"name": "MacBookPro"})
+
+    assert response.status_code == 200
+    item_url = response.json()["items"][0]["details"]["itemWebUrl"]
+    assert item_url == original_url
+
+
+def test_epn_url_applied_to_all_items_in_response(client):
+    """L2: EPN transformation is applied to every item in a multi-item response."""
+    items = [
+        _make_item_with_url("item1", 500.0, "https://www.ebay.com/itm/111"),
+        _make_item_with_url("item2", 800.0, "https://www.ebay.com/itm/222"),
+        _make_item_with_url("item3", 1200.0, "https://www.ebay.com/itm/333"),
+    ]
+    fake_db = FakeDB({
+        "mac_book_pro": FakeCollection(items),
+        "campaigns": FakeCampaignsCollection({"name": "MacBookPro", "campaignId": "CAMPALL"}),
+    })
+    app.state.db = fake_db
+
+    response = client.post("/ebay/items", json={"name": "MacBookPro"})
+
+    assert response.status_code == 200
+    returned_items = response.json()["items"]
+    assert len(returned_items) == 3
+    for item in returned_items:
+        url = item["details"]["itemWebUrl"]
+        assert "campid=CAMPALL" in url, f"EPN params missing from {url}"
+
+
+def test_epn_url_transformed_via_cache_hit_path(client):
+    """M1: EPN transformation is applied when items are served from the stats cache."""
+    cached_doc = {
+        "_id": "deadbeef",
+        "filter": {},
+        "productName": "MacBookPro",
+        "valid": True,
+        "hits": 1,
+        "totalCount": 1,
+        "stats": {"min": 500.0, "max": 500.0, "median": 500.0, "mean": 500.0, "count": 1, "priceBuckets": None},
+        "baseStats": None,
+        "availableFilters": {},
+    }
+    original_url = "https://www.ebay.com/itm/cached123"
+    items = [_make_item_with_url("item1", 500.0, original_url)]
+    fake_stats_col = FakeStatsCollection()
+    fake_stats_col._cached_doc = cached_doc
+    fake_db = FakeDB({
+        "mac_book_pro": FakeCollection(items),
+        "mac_book_pro_stats": fake_stats_col,
+        "campaigns": FakeCampaignsCollection({"name": "MacBookPro", "campaignId": "CACHCAMP"}),
+    })
+    app.state.db = fake_db
+
+    response = client.post("/ebay/items", json={"name": "MacBookPro"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert fake_stats_col._find_one_calls == 1  # confirm cache was hit
+    item_url = data["items"][0]["details"]["itemWebUrl"]
+    assert item_url.startswith(original_url)
+    assert "campid=CACHCAMP" in item_url
+    assert "mkcid=1" in item_url
+
+
+def test_epn_url_transformed_in_by_ids_endpoint(client):
+    """H1: /ebay/items/by-ids also applies EPN transformation to itemWebUrl."""
+    original_url = "https://www.ebay.com/itm/byids999"
+    item = _make_item_with_url("starred1", 700.0, original_url)
+    fake_db = FakeDB({
+        "mac_book_pro": FakeCollection([item]),
+        "campaigns": FakeCampaignsCollection({"name": "MacBookPro", "campaignId": "BYIDS99"}),
+    })
+    app.state.db = fake_db
+
+    response = client.post("/ebay/items/by-ids", json={"name": "MacBookPro", "itemIds": ["starred1"]})
+
+    assert response.status_code == 200
+    item_url = response.json()["items"][0]["details"]["itemWebUrl"]
+    assert item_url.startswith(original_url)
+    assert "campid=BYIDS99" in item_url
+    assert "mkcid=1" in item_url
+
+
+def test_epn_url_unchanged_in_by_ids_when_no_campaign(client):
+    """H1 graceful degradation: /ebay/items/by-ids leaves URL unchanged when no campaign."""
+    original_url = "https://www.ebay.com/itm/byids000"
+    item = _make_item_with_url("starred2", 700.0, original_url)
+    fake_db = FakeDB({
+        "mac_book_pro": FakeCollection([item]),
+        # FakeDB.__missing__ creates no-campaign collection automatically
+    })
+    app.state.db = fake_db
+
+    response = client.post("/ebay/items/by-ids", json={"name": "MacBookPro", "itemIds": ["starred2"]})
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["details"]["itemWebUrl"] == original_url
+
+
+def test_epn_url_uses_ampersand_for_url_with_existing_query(client):
+    """AC2: itemWebUrl that already contains query params gets '&' separator."""
+    original_url = "https://www.ebay.com/itm/123?mk=test"
+    items = [_make_item_with_url("item1", 500.0, original_url)]
+    fake_db = FakeDB({
+        "mac_book_pro": FakeCollection(items),
+        "campaigns": FakeCampaignsCollection({"name": "MacBookPro", "campaignId": "CAMP77"}),
+    })
+    app.state.db = fake_db
+
+    response = client.post("/ebay/items", json={"name": "MacBookPro"})
+
+    assert response.status_code == 200
+    item_url = response.json()["items"][0]["details"]["itemWebUrl"]
+    assert item_url.startswith(original_url + "&")
+    assert item_url.count("?") == 1
+    assert "campid=CAMP77" in item_url
