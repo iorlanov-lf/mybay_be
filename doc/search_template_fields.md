@@ -26,19 +26,19 @@ as filter state in `AppleLaptop.tsx`.
 
 Omit the field (or set to the "all" sentinel) to leave that filter unset.
 
-| Field | API filter | "All" sentinel | Notes |
-|---|---|---|---|
-| `year` | `releaseYear` | `"All years"` | Year string, e.g. `"2022"` |
-| `ram` | `ramSize` | `"All sizes"` | GB as string: `"8"`, `"16"`, `"32"`, `"64"` |
-| `ssd` | `ssdSize` | `"All sizes"` | GB as string: `"256"`, `"512"`, `"1000"`, `"2000"` |
-| `screen` | `screenSize` | `"All sizes"` | Inches as string: `"13"`, `"14"`, `"15"`, `"16"` |
-| `cpuFamily` | `cpuFamily` | `"All CPU families"` | Dynamic from data, e.g. `"M1"`, `"M2 Pro"` |
-| `cpuModel` | `cpuModel` | `"All CPU models"` | Dynamic from data |
-| `cpuSpeed` | `cpuSpeed` | `"All CPU speeds"` | GHz as string, e.g. `"3.0"` |
-| `modelNumber` | `modelNumber` | `"All model numbers"` | Dynamic from data, e.g. `"MacBookPro18,1"` |
-| `modelId` | `modelId` | `"All model ids"` | Dynamic from data, e.g. `"MLX43LL/A"` |
-| `partNumber` | `partNumber` | `"All part numbers"` | Dynamic from data, e.g. `"A2141"` |
-| `color` | `color` | `"All colors"` | Dynamic from data, e.g. `"Space Gray"` |
+| Field         | API filter    | "All" sentinel        | Notes                                              |
+| ------------- | ------------- | --------------------- | -------------------------------------------------- |
+| `year`        | `releaseYear` | `"All years"`         | Year string, e.g. `"2022"`                         |
+| `ram`         | `ramSize`     | `"All sizes"`         | GB as string: `"8"`, `"16"`, `"32"`, `"64"`        |
+| `ssd`         | `ssdSize`     | `"All sizes"`         | GB as string: `"256"`, `"512"`, `"1000"`, `"2000"` |
+| `screen`      | `screenSize`  | `"All sizes"`         | Inches as string: `"13"`, `"14"`, `"15"`, `"16"`   |
+| `cpuFamily`   | `cpuFamily`   | `"All CPU families"`  | Dynamic from data, e.g. `"M1"`, `"i7"`             |
+| `cpuModel`    | `cpuModel`    | `"All CPU models"`    | Dynamic from data                                  |
+| `cpuSpeed`    | `cpuSpeed`    | `"All CPU speeds"`    | GHz as string, e.g. `"3.0"`                        |
+| `modelNumber` | `modelNumber` | `"All model numbers"` | Dynamic from data, e.g. `"MacBookPro18,1"`         |
+| `modelId`     | `modelId`     | `"All model ids"`     | Dynamic from data, e.g. `"MLX43LL/A"`              |
+| `partNumber`  | `partNumber`  | `"All part numbers"`  | Dynamic from data, e.g. `"A2141"`                  |
+| `color`       | `color`       | `"All colors"`        | Dynamic from data, e.g. `"Space Gray"`             |
 
 Dynamic fields — valid values depend on what's in the database. Omit them in templates
 unless you know the exact string the pipeline stores.
@@ -47,8 +47,8 @@ unless you know the exact string the pipeline stores.
 
 Omit to leave unbounded.
 
-| Field | API filter | Type |
-|---|---|---|
+| Field      | API filter | Type           |
+| ---------- | ---------- | -------------- |
 | `minPrice` | `minPrice` | `number` (USD) |
 | `maxPrice` | `maxPrice` | `number` (USD) |
 
@@ -62,93 +62,94 @@ Each item must have at minimum `"value"` and `"code"` (code drives the badge dis
 
 #### `conditions` → API `condition`
 
-| `value` | `code` | Meaning |
-|---|---|---|
-| `"New"` | `"N"` | New |
-| `"Open box"` | `"OB"` | Open box |
-| `"Excellent - Refurbished"` | `"ER"` | Excellent refurbished |
-| `"Very Good - Refurbished"` | `"VGR"` | Very good refurbished |
-| `"Good - Refurbished"` | `"GR"` | Good refurbished |
-| `"Used"` | `"U"` | Used |
-| `"For parts or not working"` | `"FP"` | Parts / not working |
+| `value`                      | `code`  | Meaning               |
+| ---------------------------- | ------- | --------------------- |
+| `"New"`                      | `"N"`   | New                   |
+| `"Open box"`                 | `"OB"`  | Open box              |
+| `"Excellent - Refurbished"`  | `"ER"`  | Excellent refurbished |
+| `"Very Good - Refurbished"`  | `"VGR"` | Very good refurbished |
+| `"Good - Refurbished"`       | `"GR"`  | Good refurbished      |
+| `"Used"`                     | `"U"`   | Used                  |
+| `"For parts or not working"` | `"FP"`  | Parts / not working   |
 
 ---
 
 #### `batteries` → API `battery`
 
-| `value` | `code` | Meaning |
-|---|---|---|
-| `"G"` | `"G"` | Good |
-| `"F"` | `"F"` | Fair |
-| `"P"` | `"P"` | Poor |
-| `"NM"` | `"NM"` | Not mentioned |
-| `"N"` | `"N"` | Not included |
-| `"U"` | `"U"` | Unknown (legacy) |
+| `value` | `code` | Meaning          |
+| ------- | ------ | ---------------- |
+| `"G"`   | `"G"`  | Good             |
+| `"F"`   | `"F"`  | Fair             |
+| `"P"`   | `"P"`  | Poor             |
+| `"NM"`  | `"NM"` | Not mentioned    |
+| `"N"`   | `"N"`  | Not included     |
+| `"U"`   | `"U"`  | Unknown (legacy) |
 
 ---
 
 #### `screenConditions` / `keyboardConditions` / `housingConditions` / `audioConditions` / `portsConditions`
+
 → API `screen` / `keyboard` / `housing` / `audio` / `ports`
 
 All five use the same grade set:
 
-| `value` | `code` | Meaning |
-|---|---|---|
-| `"G"` | `"G"` | Good |
-| `"NM"` | `"NM"` | Not mentioned |
-| `"MN"` | `"MN"` | Minor damage |
-| `"MJ"` | `"MJ"` | Major damage |
+| `value` | `code` | Meaning       |
+| ------- | ------ | ------------- |
+| `"G"`   | `"G"`  | Good          |
+| `"NM"`  | `"NM"` | Not mentioned |
+| `"MN"`  | `"MN"` | Minor damage  |
+| `"MJ"`  | `"MJ"` | Major damage  |
 
 ---
 
 #### `functionalities` → API `functionality`
 
-| `value` | `code` | Meaning |
-|---|---|---|
-| `"L"` | `"L"` | Full laptop |
-| `"D"` | `"D"` | Desktop only (lid broken) |
-| `"NF"` | `"NF"` | Not functional |
-| `"NM"` | `"NM"` | Not mentioned |
-| `"U"` | `"U"` | Unknown (legacy) |
+| `value` | `code` | Meaning                   |
+| ------- | ------ | ------------------------- |
+| `"L"`   | `"L"`  | Full laptop               |
+| `"D"`   | `"D"`  | Desktop only (lid broken) |
+| `"NF"`  | `"NF"` | Not functional            |
+| `"NM"`  | `"NM"` | Not mentioned             |
+| `"U"`   | `"U"`  | Unknown (legacy)          |
 
 ---
 
 #### `chargers` → API `charger`
 
-| `value` | `code` | Meaning |
-|---|---|---|
-| `"Y"` | `"Y"` | Included |
-| `"N"` | `"N"` | Not included |
-| `"NM"` | `"NM"` | Not mentioned |
-| `"U"` | `"U"` | Unknown (legacy) |
+| `value` | `code` | Meaning          |
+| ------- | ------ | ---------------- |
+| `"Y"`   | `"Y"`  | Included         |
+| `"N"`   | `"N"`  | Not included     |
+| `"NM"`  | `"NM"` | Not mentioned    |
+| `"U"`   | `"U"`  | Unknown (legacy) |
 
 ---
 
 #### `specsCompleteness` → API `specsCompleteness`
 
-| `value` | `code` | Meaning |
-|---|---|---|
+| `value`  | `code`   | Meaning                |
+| -------- | -------- | ---------------------- |
 | `"Good"` | `"Good"` | All main specs present |
-| `"Fair"` | `"Fair"` | Some specs missing |
-| `"Bad"` | `"Bad"` | Most specs missing |
+| `"Fair"` | `"Fair"` | Some specs missing     |
+| `"Bad"`  | `"Bad"`  | Most specs missing     |
 
 ---
 
 #### `specsConsistency` → API `specsConsistency`
 
-| `value` | `code` | Meaning |
-|---|---|---|
-| `"Good"` | `"Good"` | No conflicts |
-| `"Bad"` | `"Bad"` | Conflicting specs found |
+| `value`  | `code`   | Meaning                 |
+| -------- | -------- | ----------------------- |
+| `"Good"` | `"Good"` | No conflicts            |
+| `"Bad"`  | `"Bad"`  | Conflicting specs found |
 
 ---
 
 #### `returnables` → API `returnable`
 
-| `value` | `code` | Meaning |
-|---|---|---|
-| `"true"` | `"true"` | Returns accepted |
-| `"false"` | `"false"` | No returns |
+| `value`   | `code`    | Meaning          |
+| --------- | --------- | ---------------- |
+| `"true"`  | `"true"`  | Returns accepted |
+| `"false"` | `"false"` | No returns       |
 
 Note: stored as strings, converted to booleans when building the API request.
 
@@ -156,10 +157,10 @@ Note: stored as strings, converted to booleans when building the API request.
 
 #### `returnShippingPayers` → API `returnShippingCostPayer`
 
-| `value` | `code` | Meaning |
-|---|---|---|
+| `value`    | `code`     | Meaning                     |
+| ---------- | ---------- | --------------------------- |
 | `"SELLER"` | `"SELLER"` | Seller pays return shipping |
-| `"BUYER"` | `"BUYER"` | Buyer pays return shipping |
+| `"BUYER"`  | `"BUYER"`  | Buyer pays return shipping  |
 
 ---
 
@@ -178,12 +179,8 @@ Note: stored as strings, converted to booleans when building the API request.
       { "value": "Good - Refurbished", "code": "GR" },
       { "value": "Excellent - Refurbished", "code": "ER" }
     ],
-    "functionalities": [
-      { "value": "L", "code": "L" }
-    ],
-    "specsCompleteness": [
-      { "value": "Good", "code": "Good" }
-    ]
+    "functionalities": [{ "value": "L", "code": "L" }],
+    "specsCompleteness": [{ "value": "Good", "code": "Good" }]
   }
 }
 ```
