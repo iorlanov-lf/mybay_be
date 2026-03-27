@@ -55,11 +55,6 @@ RANK_SORT_MAP = {
     "specsConsistency": "llmAnalysis.specsConsistencyRank",
 }
 
-# Spec filter keys that have bestGuess fallback in llmAnalysis.specsAnalysis
-BEST_GUESS_FIELDS = [
-    "releaseYear", "cpuFamily", "screenSize", "ramSize", "ssdSize",
-]
-
 # EPN affiliate URL parameters (appended to itemWebUrl)
 _EPN_PARAMS = "mkcid=1&mkrid=711-53200-19255-0&siteid=0&campid={campaign_id}&customid=&toolid=10001&mkevt=1"
 
@@ -110,6 +105,8 @@ _PIPELINE_PROJECTION: Dict[str, int] = {
     "llmSpecs.modelNumber": 1,
     "llmSpecs.modelId": 1,
     "llmSpecs.partNumber": 1,
+    # specsFilter — pre-computed filter values used by facets
+    "specsFilter": 1,
     # llmAnalysis — issue/completeness: UI; rank fields: sort only
     "llmAnalysis.specsAnalysis": 1,
     "llmAnalysis.mainSpecsIssueSeverity": 1,
@@ -147,26 +144,12 @@ def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = 
         return None
     query: Dict[str, Any] = {"$and": []}
 
-    def _append_llm_spec_or_bestguess_filter(filter_key: str, raw_value: Any) -> None:
-        values = list(raw_value) if isinstance(raw_value, list) else [raw_value]
-        mongo_path = LLM_SPEC_FIELD_MAP[filter_key]
-        if filter_key in BEST_GUESS_FIELDS:
-            query["$and"].append(
-                {
-                    "$or": [
-                        {mongo_path: {"$in": values}},
-                        {f"llmAnalysis.specsAnalysis.{filter_key}.bestGuess": {"$in": values}},
-                    ]
-                }
-            )
-        else:
-            query["$and"].append({mongo_path: {"$in": values}})
-
-    # llmSpecs fields (with bestGuess fallback from llmAnalysis for main specs)
+    # specsFilter fields (pre-computed: llmSpecs if non-empty, else bestGuess fallback)
     for filter_key in LLM_SPEC_FIELD_MAP:
         value = filter_data.get(filter_key)
         if value is not None and value != []:
-            _append_llm_spec_or_bestguess_filter(filter_key, value)
+            values = list(value) if isinstance(value, list) else [value]
+            query["$and"].append({f"specsFilter.{filter_key}": {"$in": values}})
 
     # llmAnalysis fields (specsCompleteness, specsConsistency)
     for analysis_field in ANALYSIS_FILTER_FIELDS:
@@ -319,26 +302,6 @@ def _array_field_facet(field_path: str, price_match: Optional[Dict[str, Any]] = 
     return steps
 
 
-def _bestguess_array_facet(llm_path: str, guess_path: str, price_match: Optional[Dict[str, Any]] = None) -> List[Dict]:
-    steps: List[Dict] = []
-    if price_match:
-        steps.append({"$match": price_match})
-    steps.append({
-        "$addFields": {
-            "_combined": {
-                "$setUnion": [
-                    {"$ifNull": [f"${llm_path}", []]},
-                    {"$ifNull": [f"${guess_path}", []]},
-                ]
-            }
-        }
-    })
-    steps.append({"$unwind": "$_combined"})
-    steps.append({"$group": {"_id": "$_combined", "count": {"$sum": 1}}})
-    steps.append({"$sort": {"_id": 1}})
-    return steps
-
-
 def _scalar_field_facet(field_path: str, price_match: Optional[Dict[str, Any]] = None) -> List[Dict]:
     steps: List[Dict] = []
     if price_match:
@@ -350,13 +313,8 @@ def _scalar_field_facet(field_path: str, price_match: Optional[Dict[str, Any]] =
 
 def _build_filter_value_facets(price_match: Optional[Dict[str, Any]] = None) -> Dict[str, List[Dict]]:
     facets: Dict[str, List[Dict]] = {}
-    for field in BEST_GUESS_FIELDS:
-        llm_path = LLM_SPEC_FIELD_MAP[field]
-        guess_path = f"llmAnalysis.specsAnalysis.{field}.bestGuess"
-        facets[field] = _bestguess_array_facet(llm_path, guess_path, price_match)
     for field in LLM_SPEC_FIELD_MAP:
-        if field not in BEST_GUESS_FIELDS:
-            facets[field] = _array_field_facet(LLM_SPEC_FIELD_MAP[field], price_match)
+        facets[field] = _array_field_facet(f"specsFilter.{field}", price_match)
     for field in ANALYSIS_FILTER_FIELDS:
         facets[field] = _scalar_field_facet(f"llmAnalysis.{field}", price_match)
     for field in LLM_FIELDS:
@@ -528,6 +486,7 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
     mongo_sort_specs = _compose_sort_specs(payload.sortSpecs)
 
     match_query = _compose_query(payload.filter, exclude_price=True)
+    print("Match query:", json.dumps(match_query, indent=2))  # Debug log
     price_match = _build_price_match(payload.filter)
 
     # Apply price cap only when no explicit price filter is present

@@ -6,7 +6,7 @@ from main import app
 from get_items import (
     _compose_query, _build_price_match, _build_aggregation_pipeline,
     _build_cache_hit_pipeline, _build_epn_url,
-    LLM_SPEC_FIELD_MAP, BEST_GUESS_FIELDS, ANALYSIS_FILTER_FIELDS, LLM_FIELDS,
+    LLM_SPEC_FIELD_MAP, ANALYSIS_FILTER_FIELDS, LLM_FIELDS,
 )
 
 
@@ -18,17 +18,19 @@ def client():
 
 def _make_item(item_id, price, screen="Good", product_line=None):
     """Build a minimal MongoDB document for integration tests."""
+    llm_specs = {
+        "productLine": [product_line or "MacBook Pro 15\" 2019"],
+        "releaseYear": ["2019"],
+        "screenSize": [15.4],
+        "ramSize": [16],
+        "ssdSize": [256],
+    }
     return {
         "itemId": item_id,
         "details": {"title": f"MacBook {item_id}", "condition": "Used"},
         "derived": {"price": price},
-        "llmSpecs": {
-            "productLine": [product_line or "MacBook Pro 15\" 2019"],
-            "releaseYear": ["2019"],
-            "screenSize": [15.4],
-            "ramSize": [16],
-            "ssdSize": [256],
-        },
+        "llmSpecs": llm_specs,
+        "specsFilter": llm_specs,  # llmSpecs is non-empty so specsFilter == llmSpecs
         "llmDerived": {"screen": screen, "subject": "L"},
     }
 
@@ -56,24 +58,13 @@ def _fake_filter_value_facet(docs: List[Dict[str, Any]], key: str) -> List[Dict[
     """Build {_id, count} list for a filter key from docs (mirrors MongoDB facet output)."""
     counts: Dict[Any, int] = {}
     for doc in docs:
-        llm_specs = doc.get("llmSpecs") or {}
+        specs_filter = doc.get("specsFilter") or {}
         llm_analysis = doc.get("llmAnalysis") or {}
         llm_derived = doc.get("llmDerived") or {}
         details = doc.get("details") or {}
         values: set = set()
-        if key in BEST_GUESS_FIELDS:
-            mongo_field = LLM_SPEC_FIELD_MAP[key].split(".")[-1]
-            spec_vals = llm_specs.get(mongo_field) or []
-            bg_vals = ((llm_analysis.get("specsAnalysis") or {}).get(key) or {}).get("bestGuess") or []
-            for v in (spec_vals if isinstance(spec_vals, list) else [spec_vals]):
-                if v is not None:
-                    values.add(v)
-            for v in (bg_vals if isinstance(bg_vals, list) else [bg_vals]):
-                if v is not None:
-                    values.add(v)
-        elif key in LLM_SPEC_FIELD_MAP:
-            mongo_field = LLM_SPEC_FIELD_MAP[key].split(".")[-1]
-            spec_vals = llm_specs.get(mongo_field) or []
+        if key in LLM_SPEC_FIELD_MAP:
+            spec_vals = specs_filter.get(key) or []
             for v in (spec_vals if isinstance(spec_vals, list) else [spec_vals]):
                 if v is not None:
                     values.add(v)
@@ -324,25 +315,21 @@ def test_ebay_items_page1_has_available_filters(mock_db, client):
 # ── Unit tests: filter query generation ──
 
 
-def test_compose_query_spec_filter_routes_to_llm_specs():
-    """Spec filter keys route to llmSpecs.* MongoDB paths."""
+def test_compose_query_spec_filter_routes_to_specs_filter():
+    """Spec filter keys route to specsFilter.* MongoDB paths (no $or needed)."""
     query = _compose_query({"ramSize": [16]})
     assert query is not None
     clauses = query["$and"]
-    # ramSize with bestGuess fallback → $or clause
-    or_clause = next((c for c in clauses if "$or" in c), None)
-    assert or_clause is not None
-    or_arms = or_clause["$or"]
-    assert any("llmSpecs.ramSize" in arm for arm in or_arms)
-    assert any("llmAnalysis.specsAnalysis.ramSize.bestGuess" in arm for arm in or_arms)
+    assert {"specsFilter.ramSize": {"$in": [16]}} in clauses
+    assert not any("$or" in c for c in clauses)
 
 
-def test_compose_query_product_line_routes_to_llm_specs():
-    """productLine filter routes to llmSpecs.productLine (no bestGuess fallback)."""
+def test_compose_query_product_line_routes_to_specs_filter():
+    """productLine filter routes to specsFilter.productLine."""
     query = _compose_query({"productLine": ["MacBook Pro"]})
     assert query is not None
     clauses = query["$and"]
-    assert {"llmSpecs.productLine": {"$in": ["MacBook Pro"]}} in clauses
+    assert {"specsFilter.productLine": {"$in": ["MacBook Pro"]}} in clauses
 
 
 def test_compose_query_analysis_routes_to_llm_analysis():
@@ -361,15 +348,13 @@ def test_compose_query_subject_routes_to_llm_derived():
     assert {"llmDerived.subject": {"$in": ["L"]}} in clauses
 
 
-def test_compose_query_screen_size_has_bestguess_fallback():
-    """screenSize filter includes bestGuess fallback from llmAnalysis.specsAnalysis.screenSize."""
+def test_compose_query_screen_size_uses_specs_filter():
+    """screenSize filter uses specsFilter (no $or, no bestGuess path)."""
     query = _compose_query({"screenSize": [15.4]})
     assert query is not None
-    or_clause = next((c for c in query["$and"] if "$or" in c), None)
-    assert or_clause is not None
-    paths = [list(arm.keys())[0] for arm in or_clause["$or"]]
-    assert "llmSpecs.screenSize" in paths
-    assert "llmAnalysis.specsAnalysis.screenSize.bestGuess" in paths
+    clauses = query["$and"]
+    assert {"specsFilter.screenSize": {"$in": [15.4]}} in clauses
+    assert not any("$or" in c for c in clauses)
 
 
 def test_compose_query_no_derived_fields_queried():

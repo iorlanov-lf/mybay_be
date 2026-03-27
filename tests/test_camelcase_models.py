@@ -127,10 +127,10 @@ def test_variant_spec_camelcase():
 # ── Query/filter helper tests ──
 
 def test_compose_query_uses_camelcase_derived_paths():
-    """_compose_query should use llmSpecs.releaseYear paths (not snake_case)."""
+    """_compose_query should use specsFilter.releaseYear paths (not snake_case)."""
     query = _compose_query({"releaseYear": ["2017"]})
     query_str = str(query)
-    assert "llmSpecs.releaseYear" in query_str
+    assert "specsFilter.releaseYear" in query_str
     assert "derived.release_year" not in query_str
     assert "llmSpecs.release_year" not in query_str
 
@@ -416,18 +416,18 @@ def test_compose_query_specs_consistency_filter():
 
 
 def test_compose_query_bestguess_fallback():
-    """_compose_query for main spec fields includes bestGuess fallback from llmAnalysis."""
+    """_compose_query for spec fields uses specsFilter (pre-computed with bestGuess fallback)."""
     query = _compose_query({"releaseYear": ["2017"]})
     query_str = str(query)
-    assert "llmSpecs.releaseYear" in query_str
-    assert "llmAnalysis.specsAnalysis.releaseYear.bestGuess" in query_str
+    assert "specsFilter.releaseYear" in query_str
+    assert "$or" not in query_str
 
 
 def test_compose_query_non_bestguess_field():
-    """_compose_query for non-main spec fields does NOT include bestGuess fallback."""
+    """_compose_query for all spec fields uses specsFilter (no $or needed)."""
     query = _compose_query({"color": ["Silver"]})
     query_str = str(query)
-    assert "llmSpecs.color" in query_str
+    assert "specsFilter.color" in query_str
     assert "bestGuess" not in query_str
 
 
