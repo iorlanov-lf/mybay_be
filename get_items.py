@@ -134,7 +134,7 @@ _PIPELINE_PROJECTION: Dict[str, int] = {
 }
 
 
-def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = False) -> Optional[Dict[str, Any]]:
+def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = False) -> Dict[str, Any]:
     query: Dict[str, Any] = {"$and": [{"show": True}]}
 
     if not filter_data:
@@ -322,7 +322,7 @@ def _build_filter_value_facets(price_match: Optional[Dict[str, Any]] = None) -> 
 
 
 def _build_aggregation_pipeline(
-    match_query: Optional[Dict[str, Any]],
+    match_query: Dict[str, Any],
     sort_specs: List[tuple],
     skip: int,
     limit: int,
@@ -330,14 +330,15 @@ def _build_aggregation_pipeline(
     price_match: Optional[Dict[str, Any]],
 ) -> List[Dict]:
     pipeline: List[Dict] = []
-    if match_query:
-        pipeline.append({"$match": match_query})
+    pipeline.append({"$match": match_query})
     pipeline.append({"$project": _PIPELINE_PROJECTION})
     facet: Dict[str, List[Dict]] = {}
     facet["totalCount"] = _count_facet(price_match)
     facet["items"] = _items_facet(sort_specs, skip, limit, price_match)
     if is_first_page:
         if price_match:
+            # baseStats/basePriceBins: no price filter, but still scoped to show=True
+            # documents via the $match earlier in the pipeline (Story 7.7).
             facet["baseStats"] = _stats_facet()
             facet["basePriceBins"] = _price_bins_facet()
             facet["stats"] = _stats_facet(price_match)

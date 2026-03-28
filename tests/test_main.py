@@ -27,6 +27,7 @@ def _make_item(item_id, price, screen="Good", product_line=None):
     }
     return {
         "itemId": item_id,
+        "show": True,
         "details": {"title": f"MacBook {item_id}", "condition": "Used"},
         "derived": {"price": price},
         "llmSpecs": llm_specs,
