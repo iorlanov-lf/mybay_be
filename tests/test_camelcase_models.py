@@ -370,7 +370,8 @@ def test_compose_query_price_range_both():
     """_compose_query with minPrice and maxPrice produces $gte/$lte range."""
     query = _compose_query({"minPrice": 500, "maxPrice": 1000})
     assert query is not None
-    price_cond = query["$and"][0]
+    assert query["$and"][0] == {"show": True}
+    price_cond = query["$and"][-1]
     assert price_cond == {"derived.price": {"$gte": 500, "$lte": 1000}}
 
 
@@ -378,7 +379,8 @@ def test_compose_query_price_range_min_only():
     """_compose_query with minPrice only produces $gte without $lte."""
     query = _compose_query({"minPrice": 500})
     assert query is not None
-    price_cond = query["$and"][0]
+    assert query["$and"][0] == {"show": True}
+    price_cond = query["$and"][-1]
     assert price_cond == {"derived.price": {"$gte": 500}}
     assert "$lte" not in price_cond["derived.price"]
 
@@ -387,15 +389,16 @@ def test_compose_query_price_range_max_only():
     """_compose_query with maxPrice only produces $lte without $gte."""
     query = _compose_query({"maxPrice": 1000})
     assert query is not None
-    price_cond = query["$and"][0]
+    assert query["$and"][0] == {"show": True}
+    price_cond = query["$and"][-1]
     assert price_cond == {"derived.price": {"$lte": 1000}}
     assert "$gte" not in price_cond["derived.price"]
 
 
 def test_compose_query_price_range_none():
-    """_compose_query with both None produces no price condition."""
+    """_compose_query with both None produces only the base show condition."""
     query = _compose_query({"minPrice": None, "maxPrice": None})
-    assert query is None
+    assert query == {"$and": [{"show": True}]}
 
 
 # ── Story 3.2a: Specs Completeness/Consistency and BestGuess tests ──
@@ -462,10 +465,10 @@ def test_compose_query_exclude_price_omits_price_filter():
     query_with_price = _compose_query(filter_data, exclude_price=False)
     query_without_price = _compose_query(filter_data, exclude_price=True)
 
-    # With price: should have 2 conditions (ramSize + price)
-    assert len(query_with_price["$and"]) == 2
-    # Without price: should have 1 condition (ramSize only)
-    assert len(query_without_price["$and"]) == 1
+    # With price: show + ramSize + price = 3 conditions
+    assert len(query_with_price["$and"]) == 3
+    # Without price: show + ramSize = 2 conditions
+    assert len(query_without_price["$and"]) == 2
 
 
 def test_compose_query_exclude_price_keeps_other_filters():
@@ -478,8 +481,8 @@ def test_compose_query_exclude_price_keeps_other_filters():
         "screen": ["G"],
     }
     query = _compose_query(filter_data, exclude_price=True)
-    # ramSize + screenSize + screen (llm) = 3 conditions, no price
-    assert len(query["$and"]) == 3
+    # show + ramSize + screenSize + screen (llm) = 4 conditions, no price
+    assert len(query["$and"]) == 4
 
 
 def test_compose_query_exclude_price_no_price_in_filter():
@@ -494,7 +497,7 @@ def test_compose_query_exclude_price_default_false():
     """_compose_query default exclude_price is False (includes price)."""
     filter_data = {"minPrice": 500}
     query = _compose_query(filter_data)
-    assert len(query["$and"]) == 1
+    assert len(query["$and"]) == 2  # show + price
     assert "derived.price" in str(query)
 
 

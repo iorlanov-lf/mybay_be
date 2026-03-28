@@ -65,12 +65,6 @@ def _build_epn_url(original_url: str, campaign_id: str) -> str:
     return original_url + separator + _EPN_PARAMS.format(campaign_id=campaign_id)
 
 
-# Hard price cap per product — items above this price are excluded from all results
-PRICE_CAP = {
-    "MacBookPro": 3000,
-    "MacBookAir": 1500,
-}
-
 # Fixed $100 bucket boundaries for price histograms (0, 100, ..., 3000)
 PRICE_BUCKET_BOUNDARIES = list(range(0, 3100, 100))
 
@@ -81,6 +75,7 @@ PRICE_BUCKET_BOUNDARIES = list(range(0, 3100, 100))
 _PIPELINE_PROJECTION: Dict[str, int] = {
     "_id": 1,
     "itemId": 1,
+    "show": 1,
     # details — UI fields only (excludes full eBay API payload)
     "details.title": 1,
     "details.condition": 1,
@@ -140,9 +135,10 @@ _PIPELINE_PROJECTION: Dict[str, int] = {
 
 
 def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = False) -> Optional[Dict[str, Any]]:
+    query: Dict[str, Any] = {"$and": [{"show": True}]}
+
     if not filter_data:
-        return None
-    query: Dict[str, Any] = {"$and": []}
+        return query
 
     # specsFilter fields (pre-computed: llmSpecs if non-empty, else bestGuess fallback)
     for filter_key in LLM_SPEC_FIELD_MAP:
@@ -192,7 +188,7 @@ def _compose_query(filter_data: Optional[Dict[str, Any]], exclude_price: bool = 
                 price_condition["$lte"] = max_price
             query["$and"].append({"derived.price": price_condition})
 
-    return query if query["$and"] else None
+    return query
 
 
 def _compose_sort_specs(sort_specs: Optional[List[SortSpecRequest]]) -> List[tuple[str, int]]:
@@ -403,41 +399,35 @@ def _parse_available_filters(
 def _build_cache_hit_pipeline(
     match_query: Optional[Dict[str, Any]],
     price_match: Optional[Dict[str, Any]],
-    price_cap: Optional[int],
     sort_specs: List[tuple],
     skip: int,
     limit: int,
 ) -> List[Dict]:
     """Flat pipeline used when stats/filters come from cache.
 
-    Produces exactly one price condition:
-    - user's minPrice / maxPrice when provided
-    - product price cap as the upper bound when no user maxPrice is set
+    Always starts with {show: True}. Appends user price filter if present.
     $project is placed last — it only runs on the final `limit` documents.
     Total count is read from the cache document, not computed here.
     """
     pipeline: List[Dict] = []
 
-    # Build single effective price condition
+    # Collect clauses: base show flag, user filters (excluding price), then price
+    match_clauses: List[Dict] = [{"show": True}]
+    if match_query:
+        match_clauses += [c for c in match_query["$and"] if "derived.price" not in c and c != {"show": True}]
+
     user_cond = (price_match or {}).get("derived.price", {})
     eff_price: Dict[str, Any] = {}
     if "$gte" in user_cond:
         eff_price["$gte"] = user_cond["$gte"]
     if "$lte" in user_cond:
-        eff_price["$lte"] = user_cond["$lte"]       # user maxPrice: inclusive
-    elif price_cap is not None:
-        eff_price["$lt"] = price_cap                # no user maxPrice: use cap
-
-    # Collect non-price clauses from match_query, then append single price clause
-    match_clauses: List[Dict] = []
-    if match_query:
-        match_clauses = [c for c in match_query["$and"] if "derived.price" not in c]
+        eff_price["$lte"] = user_cond["$lte"]
     if eff_price:
         match_clauses.append({"derived.price": eff_price})
 
     if len(match_clauses) > 1:
         pipeline.append({"$match": {"$and": match_clauses}})
-    elif len(match_clauses) == 1:
+    else:
         pipeline.append({"$match": match_clauses[0]})
 
     pipeline.append({"$sort": dict(sort_specs)})
@@ -486,18 +476,8 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
     mongo_sort_specs = _compose_sort_specs(payload.sortSpecs)
 
     match_query = _compose_query(payload.filter, exclude_price=True)
-    print("Match query:", json.dumps(match_query, indent=2))  # Debug log
+    #print("Match query:", json.dumps(match_query, indent=2))  # Debug log
     price_match = _build_price_match(payload.filter)
-
-    # Apply price cap only when no explicit price filter is present
-    if price_match is None:
-        price_cap = PRICE_CAP.get(payload.name)
-        if price_cap is not None:
-            cap_condition = {"derived.price": {"$lt": price_cap}}
-            if match_query:
-                match_query["$and"].append(cap_condition)
-            else:
-                match_query = {"$and": [cap_condition]}
 
     # ── Stats/filter cache lookup (all pages) ──
     cache_col = STATS_CACHE_MAP.get(payload.name)
@@ -508,9 +488,9 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
         # ── Cache hit: flat pipeline, no $facet, total from cache ──
         await increment_hits(db, cache_col, fhash)
         pipeline = _build_cache_hit_pipeline(
-            match_query, price_match, PRICE_CAP.get(payload.name), mongo_sort_specs, skip, limit
+            match_query, price_match, mongo_sort_specs, skip, limit
         )
-        #print("Aggregation pipeline (cache hit):", json.dumps(pipeline, indent=2))  # Debug log
+        print("Aggregation pipeline (cache hit):", json.dumps(pipeline, indent=2))  # Debug log
         docs = await collection.aggregate(pipeline).to_list(None)
         items = [_document_to_ebay_item(doc) for doc in docs]
         total = cache_doc["totalCount"]
@@ -522,7 +502,7 @@ async def ebay_items(request: Request, payload: EbayItemsRequest):
         pipeline = _build_aggregation_pipeline(
             match_query, mongo_sort_specs, skip, limit, is_first_page, price_match
         )
-        #print("Aggregation pipeline:", json.dumps(pipeline, indent=2))  # Debug log
+        print("Aggregation pipeline:", json.dumps(pipeline, indent=2))  # Debug log
         facet_result = (await collection.aggregate(pipeline).to_list(None))[0]
 
         total_docs = facet_result.get("totalCount", [])
