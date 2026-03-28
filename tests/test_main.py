@@ -325,10 +325,12 @@ def test_compose_query_spec_filter_routes_to_specs_filter():
     assert not any("$or" in c for c in clauses)
 
 
-def test_compose_query_product_line_ignored():
-    """productLine is not filterable — show=True already enforces it; unknown keys are silently ignored."""
+def test_compose_query_product_line_routes_to_specs_filter():
+    """productLine filter routes to specsFilter.productLine."""
     query = _compose_query({"productLine": ["MacBook Pro"]})
-    assert query == {"$and": [{"show": True}]}
+    assert query is not None
+    clauses = query["$and"]
+    assert {"specsFilter.productLine": {"$in": ["MacBook Pro"]}} in clauses
 
 
 def test_compose_query_analysis_routes_to_llm_analysis():
@@ -339,10 +341,12 @@ def test_compose_query_analysis_routes_to_llm_analysis():
     assert {"llmAnalysis.specsCompleteness": {"$in": ["Good"]}} in clauses
 
 
-def test_compose_query_subject_ignored():
-    """subject is not filterable — show=True already enforces subject=="L"; unknown keys are silently ignored."""
+def test_compose_query_subject_routes_to_llm_derived():
+    """subject filter routes to llmDerived.subject."""
     query = _compose_query({"subject": ["L"]})
-    assert query == {"$and": [{"show": True}]}
+    assert query is not None
+    clauses = query["$and"]
+    assert {"llmDerived.subject": {"$in": ["L"]}} in clauses
 
 
 def test_compose_query_screen_size_uses_specs_filter():
