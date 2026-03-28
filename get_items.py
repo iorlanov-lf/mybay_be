@@ -18,7 +18,7 @@ STATS_CACHE_MAP: Dict[str, str] = {
 # ── Shared field lists ──
 # LLM spec filter key → MongoDB llmSpecs path
 LLM_SPEC_FIELD_MAP: Dict[str, str] = {
-    "productLine": "llmSpecs.productLine",
+    # productLine excluded: show=True already enforces productLine == collection's product type
     "releaseYear": "llmSpecs.releaseYear",
     "cpuFamily": "llmSpecs.cpuFamily",
     "cpuModel": "llmSpecs.cpuModel",
@@ -36,8 +36,9 @@ LLM_SPEC_FIELD_MAP: Dict[str, str] = {
 ANALYSIS_FILTER_FIELDS = ["specsCompleteness", "specsConsistency"]
 
 LLM_FIELDS = [
+    # subject excluded: show=True already enforces subject == "L"
     "charger", "battery", "screen", "keyboard", "housing",
-    "audio", "ports", "functionality", "componentListing", "subject",
+    "audio", "ports", "functionality", "componentListing",
 ]
 
 RANK_SORT_MAP = {
